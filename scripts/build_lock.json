@@ -1,0 +1,32 @@
+{
+  "schema": 2,
+  "python": {
+    "version": "3.12.7",
+    "implementation": "CPython",
+    "architecture": "64bit"
+  },
+  "packages": {
+    "altgraph": "0.17.5",
+    "colorama": "0.4.6",
+    "iniconfig": "2.3.0",
+    "packaging": "26.3",
+    "pefile": "2024.8.26",
+    "pip": "24.2",
+    "pluggy": "1.6.0",
+    "pygments": "2.21.0",
+    "pyinstaller": "6.22.2",
+    "pyinstaller-hooks-contrib": "2026.6",
+    "pyside6": "6.8.3",
+    "pyside6-addons": "6.8.3",
+    "pyside6-essentials": "6.8.3",
+    "pytest": "9.1.1",
+    "pywin32-ctypes": "0.2.3",
+    "setuptools": "84.0.0",
+    "shiboken6": "6.8.3"
+  },
+  "packaging": {
+    "mode": "onedir",
+    "upx": false
+  },
+  "qt_version": "6.8.3"
+}

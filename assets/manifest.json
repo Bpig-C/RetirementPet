@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "canvas": { "width": 256, "height": 256 },
+  "anchor": { "x": 128, "y": 236 },
+  "layers_order": [
+    "shadow",
+    "back_accessory",
+    "tail",
+    "body",
+    "head",
+    "face",
+    "front_accessory",
+    "effects"
+  ],
+  "parts": {
+    "shadow": { "path": "sprites/common/shadow.png", "x": 128, "y": 236 },
+    "tail": { "path": "sprites/common/tail.png", "x": 128, "y": 236 },
+    "body": { "path": "sprites/common/body.png", "x": 128, "y": 236 },
+    "head": { "path": "sprites/common/head.png", "x": 128, "y": 236 },
+    "face_open": { "path": "sprites/common/face_open.png", "x": 128, "y": 236 },
+    "face_closed": { "path": "sprites/common/face_closed.png", "x": 128, "y": 236 },
+    "laptop": { "path": "sprites/common/laptop.png", "x": 128, "y": 236 },
+    "headset": { "path": "sprites/common/headset.png", "x": 128, "y": 236 },
+    "bowl": { "path": "sprites/common/bowl.png", "x": 128, "y": 236 },
+    "dumbbell": { "path": "sprites/common/dumbbell.png", "x": 128, "y": 236 }
+  },
+  "required_parts": ["body", "head", "face_open"],
+  "actions": {
+    "idle": { "mode": "parts", "attachments": [] },
+    "work": { "mode": "parts", "attachments": ["laptop"] },
+    "rest": { "mode": "parts", "attachments": [], "face": "face_closed" },
+    "eat": {
+      "mode": "sequence",
+      "frames": [
+        "sprites/eat/000.png",
+        "sprites/eat/001.png",
+        "sprites/eat/002.png",
+        "sprites/eat/003.png"
+      ],
+      "fps": 6,
+      "loop": true
+    },
+    "exercise": {
+      "mode": "sequence",
+      "frames": [
+        "sprites/exercise/000.png",
+        "sprites/exercise/001.png",
+        "sprites/exercise/002.png",
+        "sprites/exercise/003.png"
+      ],
+      "fps": 6,
+      "loop": true
+    },
+    "meeting": { "mode": "parts", "attachments": ["headset"] },
+    "music": { "mode": "parts", "attachments": ["headset"] },
+    "stretch": {
+      "mode": "sequence",
+      "frames": [
+        "sprites/stretch/000.png",
+        "sprites/stretch/001.png",
+        "sprites/stretch/002.png",
+        "sprites/stretch/003.png"
+      ],
+      "fps": 6,
+      "loop": true
+    },
+    "lick_paw": {
+      "mode": "sequence",
+      "frames": [
+        "sprites/lick_paw/000.png",
+        "sprites/lick_paw/001.png"
+      ],
+      "fps": 4,
+      "loop": true
+    },
+    "look_around": {
+      "mode": "sequence",
+      "frames": [
+        "sprites/look_around/000.png",
+        "sprites/look_around/001.png",
+        "sprites/look_around/002.png"
+      ],
+      "fps": 5,
+      "loop": true
+    },
+    "yawn": {
+      "mode": "sequence",
+      "frames": [
+        "sprites/yawn/000.png",
+        "sprites/yawn/001.png",
+        "sprites/yawn/002.png"
+      ],
+      "fps": 5,
+      "loop": false
+    },
+    "interact": {
+      "mode": "sequence",
+      "frames": [
+        "sprites/interact/000.png",
+        "sprites/interact/001.png"
+      ],
+      "fps": 8,
+      "loop": true
+    }
+  },
+  "effects": {
+    "zzz": "sprites/common/zzz.png",
+    "note": "sprites/common/note.png",
+    "sweat": "sprites/common/sweat.png"
+  }
+}

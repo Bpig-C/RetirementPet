@@ -1,0 +1,236 @@
+{
+  "schema_version": "1.0",
+  "package": {
+    "publisher_id": "community.retirementpet",
+    "id": "realistic-retirement-cat",
+    "version": "0.1.1",
+    "display_name": {
+      "zh-CN": "半写实退休猫（预览）"
+    }
+  },
+  "compatibility": {
+    "engine_min": "2.0.0",
+    "engine_max_exclusive": "3.0.0",
+    "required_capabilities": [
+      "renderer.sequence.v1"
+    ],
+    "optional_capabilities": []
+  },
+  "publishers": [
+    {
+      "id": "community.retirementpet",
+      "display_name": "RetirementPet local character workshop",
+      "contact": null,
+      "homepage": null
+    }
+  ],
+  "series": {
+    "id": "retirement-cat",
+    "display_name": {
+      "zh-CN": "退休猫"
+    },
+    "description": {
+      "zh-CN": "用于验证可替换角色与动作包工作流的半写实原型。"
+    }
+  },
+  "rights_declarations": [
+    {
+      "id": "rights.original",
+      "basis": "original",
+      "claimant_ref": "community.retirementpet",
+      "license": {
+        "spdx": null,
+        "legal_file_ref": "legal.license",
+        "custom_name": null
+      },
+      "scope_claimed": [
+        "personal_use",
+        "modification",
+        "redistribution"
+      ],
+      "attribution": "RetirementPet local character workshop",
+      "notes": "AI-assisted original prototype artwork; no third-party character or trademark is claimed."
+    }
+  ],
+  "sources": [
+    {
+      "id": "source.original",
+      "kind": "original_creation",
+      "creator": "community.retirementpet",
+      "title": "AI-assisted semi-realistic retirement cat v0.1",
+      "locator": null,
+      "accessed_at": null
+    }
+  ],
+  "legal_files": [
+    {
+      "id": "legal.license",
+      "path": "legal/license.txt",
+      "media_type": "text/plain",
+      "byte_size": 0,
+      "sha256": "",
+      "purpose": "license_text"
+    }
+  ],
+  "assets": [
+    {
+      "id": "asset.realistic-cat.body",
+      "path": "assets/characters/realistic-cat/body.png",
+      "media_type": "image/png",
+      "byte_size": 0,
+      "sha256": "",
+      "rights_ref": "rights.original",
+      "source_ref": "source.original",
+      "properties": {
+        "width": 1024,
+        "height": 1536
+      }
+    }
+  ],
+  "actions": [
+    {
+      "id": "action.realistic-cat.idle",
+      "semantic": "core.idle",
+      "policy_tags": [
+        "silent",
+        "meeting_safe",
+        "dnd_safe"
+      ],
+      "lifecycle": {
+        "loop": {
+          "renderer": {
+            "type": "static",
+            "asset": "asset.realistic-cat.body"
+          }
+        }
+      },
+      "user_modes": [
+        "auto",
+        "manual",
+        "disabled"
+      ],
+      "loop_modes": [
+        "repeat"
+      ],
+      "interrupt": {
+        "policy": "clip_boundary",
+        "max_exit_ms": 500
+      },
+      "audio": null
+    },
+    {
+      "id": "action.realistic-cat.work",
+      "semantic": "core.work",
+      "policy_tags": [
+        "silent",
+        "meeting_safe"
+      ],
+      "lifecycle": {
+        "loop": {
+          "renderer": {
+            "type": "static",
+            "asset": "asset.realistic-cat.body"
+          }
+        }
+      },
+      "user_modes": [
+        "auto",
+        "manual",
+        "disabled"
+      ],
+      "loop_modes": [
+        "repeat"
+      ],
+      "interrupt": {
+        "policy": "clip_boundary",
+        "max_exit_ms": 500
+      },
+      "audio": null
+    },
+    {
+      "id": "action.realistic-cat.rest",
+      "semantic": "core.rest",
+      "policy_tags": [
+        "silent",
+        "dnd_safe"
+      ],
+      "lifecycle": {
+        "loop": {
+          "renderer": {
+            "type": "static",
+            "asset": "asset.realistic-cat.body"
+          }
+        }
+      },
+      "user_modes": [
+        "auto",
+        "manual",
+        "disabled"
+      ],
+      "loop_modes": [
+        "repeat"
+      ],
+      "interrupt": {
+        "policy": "clip_boundary",
+        "max_exit_ms": 500
+      },
+      "audio": null
+    }
+  ],
+  "characters": [
+    {
+      "id": "realistic-cat",
+      "display_name": {
+        "zh-CN": "半写实退休猫"
+      },
+      "thumbnail_asset": "asset.realistic-cat.body",
+      "rig_contract_ref": null,
+      "rig_bindings": {},
+      "geometry": {
+        "logical_canvas": {
+          "width": 1024,
+          "height": 1536
+        },
+        "content_bounds": {
+          "x": 95,
+          "y": 32,
+          "width": 926,
+          "height": 1502
+        },
+        "motion_bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1024,
+          "height": 1536
+        },
+        "base_anchor": {
+          "x": 512,
+          "y": 1533
+        },
+        "bubble_anchor": {
+          "x": 512,
+          "y": 120
+        },
+        "reference_height": 1502,
+        "hit_regions": [
+          {
+            "shape": "rect",
+            "x": 95,
+            "y": 32,
+            "width": 926,
+            "height": 1502
+          }
+        ]
+      },
+      "actions": {
+        "core.idle": "action.realistic-cat.idle",
+        "core.work": "action.realistic-cat.work",
+        "core.rest": "action.realistic-cat.rest"
+      },
+      "variants": [],
+      "default_variant": null,
+      "text_profile_refs": [],
+      "recommended_profiles": {}
+    }
+  ]
+}

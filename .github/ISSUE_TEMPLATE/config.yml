@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 私密报告安全漏洞
+    url: https://github.com/Bpig-C/RetirementPet/security/advisories/new
+    about: 不要公开披露漏洞、恶意角色包、个人数据或可利用细节。
+  - name: 阅读安全报告政策
+    url: https://github.com/Bpig-C/RetirementPet/security/policy
+    about: 查看支持范围、报告内容和隐私要求。

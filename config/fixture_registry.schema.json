@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RetirementPet verification fixture registry",
+  "description": "Machine-readable registry of verification fixtures (CONFORMANCE 4). Markdown lists do not substitute this registry; expectations and hashes may not be silently rewritten.",
+  "type": "object",
+  "required": ["registry_version", "fixtures"],
+  "properties": {
+    "registry_version": {
+      "type": "string",
+      "description": "Bumped when fixture semantics change; never rewritten in place."
+    },
+    "fixtures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fixture" }
+    }
+  },
+  "$defs": {
+    "fixture": {
+      "type": "object",
+      "required": [
+        "fixture_id",
+        "path",
+        "sha256",
+        "expected_result",
+        "scenario",
+        "execution_tier"
+      ],
+      "properties": {
+        "fixture_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "description": "Stable ID; never reused for different content."
+        },
+        "path": {
+          "type": "string",
+          "description": "Repo-relative path to the fixture artifact."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "expected_result": {
+          "enum": ["ACCEPT", "ACCEPT_WITH_DEGRADATION", "REJECT", "PASS", "FAIL"],
+          "description": "For PetPack fixtures: ACCEPT / ACCEPT_WITH_DEGRADATION / REJECT. For Windows/perf scenarios: PASS / FAIL."
+        },
+        "expected_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^PPK-(ARC|MAN|RES|ACT|TXT|RGT|LCY|PRV)-[EIW][0-9]{3}$|^PPK-RGT-W[0-9]{3}$"
+          },
+          "description": "Stable diagnostic codes required on REJECT or degradation."
+        },
+        "scenario": {
+          "type": "string",
+          "description": "Human-readable description of what is exercised."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100
+        },
+        "execution_tier": {
+          "enum": [
+            "UNIT",
+            "WINDOWS_INTEGRATION",
+            "DESTRUCTIVE_LAB",
+            "MANUAL_ASSISTED",
+            "24H_SOAK"
+          ],
+          "description": "CONFORMANCE 13.1. Lower tiers never substitute higher ones."
+        },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

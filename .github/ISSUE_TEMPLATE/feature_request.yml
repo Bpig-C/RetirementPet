@@ -1,0 +1,85 @@
+name: 功能建议
+description: 建议一个聚焦、符合本地优先与低资源目标的改进
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索已有 Issue 和未来工作文档。说明需要解决的问题，而不只是某个实现名词。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 谁在什么场景遇到什么困难？
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议行为
+      description: 描述用户操作、界面反馈和预期结果。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案
+      description: 包括当前可用的绕行方式；没有时说明原因。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 主要范围
+      options:
+        - 桌宠显示与交互
+        - 角色库与 PetPack
+        - 动作与决策
+        - 待办事项
+        - 控制面板与设置
+        - 性能与稳定性
+        - 构建、发布与文档
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: resource_privacy
+    attributes:
+      label: 资源、隐私与兼容影响
+      description: 说明预期 CPU/内存/磁盘/网络使用，是否读取用户数据，以及旧设置或角色包如何处理。
+      placeholder: 默认不联网；不读取任务正文；隐藏态不增加视觉 tick……
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 可以怎样验收
+      description: 给出 2 至 5 条可观察的完成条件。
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: 草图或参考
+      description: 不要粘贴未经许可的影视、动漫、游戏素材；链接也应说明来源和使用目的。
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: 提交确认
+      options:
+        - label: 我已搜索已有 Issue，未发现同一建议。
+          required: true
+        - label: 我没有在内容中包含真实任务、个人路径、令牌、密钥或其他隐私信息。
+          required: true
+        - label: 如建议涉及第三方内容，我已说明来源与许可，不以本 Issue 代替授权。
+          required: true

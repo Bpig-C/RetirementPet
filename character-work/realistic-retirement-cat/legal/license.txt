@@ -1,0 +1,9 @@
+Semi-realistic Retirement Cat prototype, version 0.1.1.
+
+The artwork is an AI-assisted original created for the RetirementPet local
+character workshop. It does not intentionally reproduce a third-party
+character, logo, or trademark.
+
+The RetirementPet project owner may use, modify, and redistribute this
+prototype as part of RetirementPet. Preserve this provenance notice when the
+asset is redistributed outside the local workspace.

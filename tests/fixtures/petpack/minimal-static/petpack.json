@@ -1,0 +1,189 @@
+{
+ "actions": [
+  {
+   "audio": null,
+   "id": "action.idle",
+   "interrupt": {
+    "max_exit_ms": 0,
+    "policy": "immediate"
+   },
+   "lifecycle": {
+    "loop": {
+     "renderer": {
+      "asset": "asset.idle",
+      "type": "static"
+     }
+    }
+   },
+   "loop_modes": [
+    "repeat"
+   ],
+   "policy_tags": [
+    "silent",
+    "meeting_safe",
+    "dnd_safe"
+   ],
+   "semantic": "core.idle",
+   "user_modes": [
+    "auto",
+    "manual",
+    "disabled"
+   ]
+  }
+ ],
+ "assets": [
+  {
+   "byte_size": 136,
+   "id": "asset.idle",
+   "media_type": "image/png",
+   "path": "assets/idle.png",
+   "properties": {
+    "height": 64,
+    "width": 64
+   },
+   "rights_ref": "rights.original",
+   "sha256": "ffd469fd878924193430f96aa52d865c356fcd2da1e77c1a367cc3f1c86fc7e4",
+   "source_ref": "source.original"
+  },
+  {
+   "byte_size": 105,
+   "id": "asset.thumb",
+   "media_type": "image/png",
+   "path": "assets/thumbnail.png",
+   "properties": {
+    "height": 32,
+    "width": 32
+   },
+   "rights_ref": "rights.original",
+   "sha256": "8f222bc74e9fde81533a8138a58e713ecc20215b52309456b1dd2412862291b4",
+   "source_ref": "source.original"
+  }
+ ],
+ "characters": [
+  {
+   "actions": {
+    "core.idle": "action.idle"
+   },
+   "default_variant": null,
+   "display_name": {
+    "zh-CN": "参考角色"
+   },
+   "geometry": {
+    "base_anchor": {
+     "x": 32,
+     "y": 60
+    },
+    "bubble_anchor": {
+     "x": 32,
+     "y": 10
+    },
+    "content_bounds": {
+     "height": 52,
+     "width": 48,
+     "x": 8,
+     "y": 8
+    },
+    "hit_regions": [
+     {
+      "height": 52,
+      "shape": "rect",
+      "width": 48,
+      "x": 8,
+      "y": 8
+     }
+    ],
+    "logical_canvas": {
+     "height": 64,
+     "width": 64
+    },
+    "motion_bounds": {
+     "height": 58,
+     "width": 56,
+     "x": 4,
+     "y": 4
+    },
+    "reference_height": 52
+   },
+   "id": "demo",
+   "recommended_profiles": {},
+   "rig_bindings": {},
+   "rig_contract_ref": null,
+   "text_profile_refs": [],
+   "thumbnail_asset": "asset.thumb",
+   "variants": []
+  }
+ ],
+ "compatibility": {
+  "engine_max_exclusive": "3.0.0",
+  "engine_min": "2.0.0",
+  "optional_capabilities": [],
+  "required_capabilities": [
+   "renderer.sequence.v1"
+  ]
+ },
+ "legal_files": [
+  {
+   "byte_size": 185,
+   "id": "legal.license",
+   "media_type": "text/plain",
+   "path": "legal/license.txt",
+   "purpose": "license_text",
+   "sha256": "2a539911540cbdc5a72bbee5d2c8b4a629d12ed6e50ca580853832f59d788e79"
+  }
+ ],
+ "package": {
+  "display_name": {
+   "en": "Minimal Static Reference",
+   "zh-CN": "最小静态参考包"
+  },
+  "id": "minimal-static",
+  "publisher_id": "community.retirementpet",
+  "version": "1.0.0"
+ },
+ "publishers": [
+  {
+   "contact": null,
+   "display_name": "RetirementPet Project",
+   "homepage": null,
+   "id": "community.retirementpet"
+  }
+ ],
+ "rights_declarations": [
+  {
+   "attribution": "RetirementPet Project",
+   "basis": "original",
+   "claimant_ref": "community.retirementpet",
+   "id": "rights.original",
+   "license": {
+    "custom_name": null,
+    "legal_file_ref": "legal.license",
+    "spdx": null
+   },
+   "notes": null,
+   "scope_claimed": [
+    "personal_use",
+    "redistribution"
+   ]
+  }
+ ],
+ "schema_version": "1.0",
+ "series": {
+  "description": {
+   "zh-CN": "PetPack 1.0 最小静态参考实现"
+  },
+  "display_name": {
+   "zh-CN": "参考系列"
+  },
+  "id": "reference"
+ },
+ "sources": [
+  {
+   "accessed_at": null,
+   "creator": "community.retirementpet",
+   "id": "source.original",
+   "kind": "original_creation",
+   "locator": null,
+   "title": "Reference sprite"
+  }
+ ]
+}

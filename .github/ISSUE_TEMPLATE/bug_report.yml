@@ -1,0 +1,112 @@
+name: 缺陷报告
+description: 报告可复现的崩溃、显示错误、数据问题或功能异常
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。安全漏洞请不要在这里公开，请改用仓库 Security 页的私密报告入口。
+        不要上传 `tasks.db`、完整 AppData、音乐、未脱敏日志或含个人信息的截图。
+
+  - type: input
+    id: version
+    attributes:
+      label: RetirementPet 版本或 commit
+      description: 填写 Release 版本；源码运行请填写完整 commit。
+      placeholder: 例如 1.1.2 Alpha 或 abcdef123456...
+    validations:
+      required: true
+
+  - type: input
+    id: build_identity
+    attributes:
+      label: 构建身份
+      description: 若使用 Release，可填写 build ID 或 EXE SHA-256；没有时写“不知道”。
+      placeholder: build ID / EXE SHA-256 / 不知道
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 与架构
+      placeholder: Windows 11 24H2，x64
+    validations:
+      required: true
+
+  - type: textarea
+    id: display
+    attributes:
+      label: 屏幕环境
+      description: 填写屏幕数量、分辨率、缩放比例、主副屏和问题发生位置；不相关可写“不相关”。
+      placeholder: 主屏 2560x1440 150%，副屏 1920x1080 100%
+    validations:
+      required: true
+
+  - type: dropdown
+    id: run_mode
+    attributes:
+      label: 运行方式
+      options:
+        - GitHub Release 完整便携目录
+        - 源码 .venv
+        - 自行构建的 frozen 目录
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从干净启动开始，逐步写出能稳定触发问题的操作。
+      placeholder: |
+        1. 启动 RetirementPet.exe
+        2. 打开……
+        3. 点击……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 可附使用虚构数据、已隐藏个人路径的截图。
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 已脱敏日志或错误代码
+      description: 只粘贴相关片段；将用户名和绝对路径替换为占位符。没有时写“无”。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 其他上下文
+      description: 说明是否为升级后出现、当前角色、是否可稳定复现等。不要上传未公开角色包。
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隐私与公开确认
+      options:
+        - label: 我确认这不是需要私密报告的安全漏洞。
+          required: true
+        - label: 我已删除任务内容、音乐、用户名、个人路径、令牌、密钥及其他隐私信息。
+          required: true
+        - label: 我没有上传 `tasks.db`、完整 AppData、完整 `.release` 目录或第三方私有角色包。
+          required: true

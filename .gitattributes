@@ -1,0 +1,4 @@
+# PetPack reference inputs are byte-exact evidence.  Do not let a user's
+# core.autocrlf setting rewrite the licensed payload behind the frozen pack.
+/tests/fixtures/petpack/minimal-static/legal/license.txt binary
+/character-work/realistic-retirement-cat/legal/license.txt binary

@@ -1,0 +1,43 @@
+name: Tests
+
+"on":
+  push:
+  pull_request:
+
+# Fork pull requests receive only the minimum read access and no credentials
+# are persisted by checkout. This workflow never consumes repository secret values.
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify checked-out public tree
+        shell: pwsh
+        run: python -I -B scripts/export_public_snapshot.py --source-root . --verify-public-tree
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run offscreen test suite
+        shell: pwsh
+        run: python -I -B -m pytest -p no:cacheprovider tests

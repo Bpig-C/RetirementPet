@@ -1,0 +1,118 @@
+name: 角色包提案
+description: 提议可公开分发的新角色、系列或 PetPack 改进
+title: "[Character Pack] "
+labels:
+  - character-pack
+body:
+  - type: markdown
+    attributes:
+      value: |
+        公开仓库只考虑来源可核查、许可覆盖公开修改与再分发的内容。现有影视、动漫、
+        游戏 IP 未经授权不能进入官方仓库。“网上找到”“粉丝创作”不是许可。
+
+  - type: input
+    id: pack_identity
+    attributes:
+      label: 建议的 PackKey 与版本
+      description: 使用稳定的小写 publisher_id/package_id 和 SemVer；尚未确定也请给候选值。
+      placeholder: example.publisher / example-cat / 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: series_character
+    attributes:
+      label: Series 与 Character ID
+      placeholder: series_id / character_id
+    validations:
+      required: true
+
+  - type: textarea
+    id: concept
+    attributes:
+      label: 角色概念与动作范围
+      description: 说明画风、角色差异，以及 idle/work/rest/eat 等已完成或计划动作。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source_type
+    attributes:
+      label: 素材来源类型
+      options:
+        - 本人原创绘制或录制
+        - 本人使用生成式 AI 生成并人工修改
+        - 明确开放许可证的第三方素材
+        - 已取得书面授权的委托或第三方素材
+        - 公有领域素材
+        - 混合来源（需逐资产说明）
+    validations:
+      required: true
+
+  - type: textarea
+    id: source
+    attributes:
+      label: 原作者与可核查来源
+      description: 逐项填写作者、原始 URL/文件记录、生成工具或委托凭证，以及拟使用的 source_ref。不得只写“网上找到”。
+      placeholder: |
+        asset_id: character.body.idle
+        author: ...
+        original source or generation record: ...
+        source_ref: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: license
+    attributes:
+      label: 许可证与再分发范围
+      description: 填写 SPDX 标识或完整许可文件来源，并说明是否允许公开使用、修改、打包到二进制和再分发。
+      placeholder: |
+        license: CC0-1.0 / CC-BY-4.0 / custom written permission / ...
+        attribution: ...
+        permits modification: yes/no
+        permits repository and binary redistribution: yes/no
+        legal_file_ref: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: ai_disclosure
+    attributes:
+      label: 生成式 AI 与人工修改说明
+      description: 使用过 AI 时填写工具与模型、生成日期、适用服务条款、生成记录和人工修改；未使用时明确写“未使用”。
+    validations:
+      required: true
+
+  - type: textarea
+    id: inventory
+    attributes:
+      label: 资产与动作清单
+      description: 列出图片尺寸/帧数、动作映射、音频、缩略图、预计归档与解压体积。
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical
+    attributes:
+      label: 构建与验证结果
+      description: 填写 petpack_cli build/validate/preflight/inspect 结果；尚未制作时写“提案阶段”。不要粘贴个人绝对路径。
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: rights
+    attributes:
+      label: 权利与隐私确认
+      options:
+        - label: 我已逐项填写真实来源与许可，理解 hash、schema 或 AI 生成不能自动证明版权授权。
+          required: true
+        - label: 我确认相应许可允许拟议的公开使用、修改和再分发，或会在提交 PR 前补齐可核查书面授权。
+          required: true
+        - label: 此提案不包含未经许可的影视、动漫、游戏角色、截图、音频、商标化形象或其他第三方 IP。
+          required: true
+        - label: 我没有上传私人角色包、个人路径、令牌、密钥、真实任务或其他隐私数据。
+          required: true
+        - label: 我理解 Issue 获得讨论不等于内容获准合并，最终仍需内容与技术审阅。
+          required: true

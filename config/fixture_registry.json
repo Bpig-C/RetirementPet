@@ -1,0 +1,15 @@
+{
+  "registry_version": "1.0.0",
+  "fixtures": [
+    {
+      "fixture_id": "valid-minimal-static",
+      "path": "tests/fixtures/petpack/minimal-static.petpack",
+      "sha256": "535f7eeb6f173698e64b776e912accc2888ab27459fd13128334cc958cb015d9",
+      "expected_result": "ACCEPT",
+      "expected_codes": [],
+      "scenario": "One character, one static core.idle sprite, thumbnail, geometry, original-rights declaration; the canonical minimal reference pack (CONFORMANCE 4.1).",
+      "timeout_ms": 5000,
+      "execution_tier": "UNIT"
+    }
+  ]
+}

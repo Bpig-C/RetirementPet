@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "additional_exclude_paths": [
+    "assets/petpack/examples/realistic-retirement-cat-0.1.0.petpack"
+  ],
+  "additional_exclude_prefixes": [],
+  "forbidden_username_sha256": [],
+  "limits": {
+    "max_archive_members": 4096,
+    "max_archive_uncompressed_bytes": 134217728,
+    "max_blob_bytes": 67108864,
+    "max_files": 20000,
+    "max_total_bytes": 268435456
+  },
+  "required_paths": [
+    ".github/CODEOWNERS",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/workflows/tests.yml",
+    "assets/LICENSE.md",
+    "config/public_snapshot.json",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/LICENSING.md",
+    "evidence/README.md",
+    "pyproject.toml",
+    "scripts/export_public_snapshot.py",
+    "src/retirement_pet/__init__.py",
+    "tests/test_public_snapshot.py"
+  ]
+}

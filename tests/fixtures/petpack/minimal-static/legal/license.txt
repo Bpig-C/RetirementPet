@@ -1,0 +1,3 @@
+RetirementPet minimal-static reference pack.
+Original content by the RetirementPet project (all rights reserved,
+personal use and redistribution as part of RetirementPet permitted).
