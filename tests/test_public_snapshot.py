@@ -523,12 +523,14 @@ def test_public_tree_verification_accepts_snapshot_manifest_but_rejects_raw_evid
     )
     reported = json.loads(capsys.readouterr().err)
     assert exit_code == 2
-    assert reported["violation_count"] == len(reported["violations"])
+    assert reported["violation_count"] == sum(
+        item["count"] for item in reported["violations"]
+    )
     assert {
         "rule": "public_tree_excluded_path",
-        "path": "evidence/local-run/settings.txt",
+        "count": 1,
     } in reported["violations"]
-    assert all(set(item) == {"rule", "path"} for item in reported["violations"])
+    assert all(set(item) == {"rule", "count"} for item in reported["violations"])
     assert "private runtime evidence" not in json.dumps(reported)
 
 
