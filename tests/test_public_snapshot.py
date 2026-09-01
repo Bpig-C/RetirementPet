@@ -487,7 +487,10 @@ def test_archive_comments_fail_closed_instead_of_hiding_machine_data(tmp_path: P
     assert "archive_metadata" in {item.rule for item in caught.value.violations}
 
 
-def test_public_tree_verification_accepts_snapshot_manifest_but_rejects_raw_evidence(tmp_path: Path):
+def test_public_tree_verification_accepts_snapshot_manifest_but_rejects_raw_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
     repo = _repo(tmp_path)
     output = tmp_path / "public"
     public_export.export_snapshot(repo, output)
@@ -514,6 +517,19 @@ def test_public_tree_verification_accepts_snapshot_manifest_but_rejects_raw_evid
     rules = {item.rule for item in caught.value.violations}
     assert "public_tree_excluded_path" in rules
     assert any(item.path == "evidence/local-run/settings.txt" for item in caught.value.violations)
+
+    exit_code = public_export.main(
+        ["--source-root", str(output), "--verify-public-tree"]
+    )
+    reported = json.loads(capsys.readouterr().err)
+    assert exit_code == 2
+    assert reported["violation_count"] == len(reported["violations"])
+    assert {
+        "rule": "public_tree_excluded_path",
+        "path": "evidence/local-run/settings.txt",
+    } in reported["violations"]
+    assert all(set(item) == {"rule", "path"} for item in reported["violations"])
+    assert "private runtime evidence" not in json.dumps(reported)
 
 
 def test_special_git_entry_and_unsafe_repository_path_are_rejected(tmp_path: Path):

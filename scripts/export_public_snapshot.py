@@ -1444,9 +1444,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             verified = verify_public_tree(args.source_root, config_path=args.config)
         except ExportRejected as exc:
+            safe_violations = sorted(
+                {(item.rule, item.path) for item in exc.violations}
+            )
             print(
                 json.dumps(
-                    {"status": "REJECTED", "violations": len(exc.violations)},
+                    {
+                        "status": "REJECTED",
+                        "violation_count": len(exc.violations),
+                        "violations": [
+                            {"rule": rule, "path": path}
+                            for rule, path in safe_violations
+                        ],
+                    },
                     ensure_ascii=False,
                 ),
                 file=sys.stderr,
