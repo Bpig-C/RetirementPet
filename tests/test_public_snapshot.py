@@ -534,6 +534,27 @@ def test_public_tree_verification_accepts_snapshot_manifest_but_rejects_raw_evid
     assert "private runtime evidence" not in json.dumps(reported)
 
 
+def test_public_tree_verification_scans_committed_head_not_worktree(tmp_path: Path):
+    source = _repo(tmp_path)
+    repo = tmp_path / "public"
+    public_export.export_snapshot(source, repo)
+    committed_readme = (repo / "README.md").read_bytes()
+    (repo / "README.md").write_text(
+        _windows_user_path("UncommittedUser", "private.txt"),
+        encoding="utf-8",
+    )
+    (repo / "untracked.txt").write_text(
+        "DO-NOT-SCAN-UNTRACKED-CONTENT",
+        encoding="utf-8",
+    )
+
+    result = public_export.verify_public_tree(repo)
+
+    assert result.source_commit == _git(repo, "rev-parse", "HEAD^{commit}")
+    assert committed_readme.startswith(b"# Safe public fixture")
+    assert "UncommittedUser" not in _git(repo, "show", "HEAD:README.md")
+
+
 def test_special_git_entry_and_unsafe_repository_path_are_rejected(tmp_path: Path):
     with pytest.raises(public_export.ExportRejected) as caught:
         public_export._validate_repo_path("safe/../escape.txt")

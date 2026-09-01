@@ -1097,11 +1097,6 @@ def verify_public_tree(
         )
     source_commit = _git_text(source_root, "rev-parse", "HEAD^{commit}")
     source_tree = _git_text(source_root, "rev-parse", "HEAD^{tree}")
-    if _git_bytes(source_root, "status", "--porcelain=v1", "-z", "--untracked-files=all"):
-        raise ExportRejected(
-            "public source repository is not clean",
-            [Violation("source_worktree_dirty", "<source>", "public-tree verification requires a clean checkout")],
-        )
 
     policy, _raw_policy = _load_policy(source_root, config_path, source_commit)
     username_hashes = _runtime_username_hashes(policy)
