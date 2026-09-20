@@ -384,12 +384,13 @@ def test_schema_version_written(tmp_path):
     repo = TaskRepository(tmp_path / "tasks.db")
     version = repo.db.execute(
         "SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    assert version[0] == "1"
+    assert version[0] == "2"
     repo.close()
 
 
-def test_previous_release_v1_schema_is_accepted_without_rewrite(tmp_path):
-    """The v1 emitted before strict preflight remains an exact v1 store."""
+def test_previous_release_v1_store_is_backed_up_then_migrated(tmp_path):
+    """A v1 store is upgraded in place after a verified pre-migration
+    backup; the backup preserves the exact v1 schema for rollback."""
     path = tmp_path / "tasks.db"
     db = sqlite3.connect(path)
     db.executescript("""
@@ -420,15 +421,30 @@ def test_previous_release_v1_schema_is_accepted_without_rewrite(tmp_path):
         INSERT INTO meta VALUES ('schema_version', '1');
     """)
     db.close()
-    before = _store_snapshot(path)
 
     repository = TaskRepository(path)
     try:
         assert repository.load_all() == {}
+        assert repository.db.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()[0] == "2"
     finally:
         repository.close()
 
-    assert _store_snapshot(path) == before
+    backups = list((tmp_path / "backups").glob("todo-backup-*-pre-migration-*"))
+    assert len(backups) == 1
+    backup_db = backups[0] / "tasks.db"
+    check = sqlite3.connect(
+        f"{backup_db.as_uri()}?mode=ro&immutable=1", uri=True)
+    try:
+        assert check.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()[0] == "1"
+    finally:
+        check.close()
+    # A valid exact-v1 snapshot of the same (empty) logical content.
+    from retirement_pet.todo.repository import TaskRepository as _Repo
+    assert _Repo.inspect_snapshot(backup_db) == (1, 0)
 
 
 def test_newer_schema_refused_without_touching_files(tmp_path):
@@ -925,7 +941,7 @@ time.sleep(60)
     try:
         assert recovered.db.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] \
-            == "1"
+            == "2"  # recovered as v1, then upgraded by the normal migration
         assert recovered.db.execute(
             "SELECT COUNT(*) FROM tasks WHERE title LIKE '%UNCOMMITTED%'"
         ).fetchone()[0] == 0
@@ -1816,12 +1832,15 @@ def test_due_dialog_real_buttons_return_three_distinct_results(
 
 def test_every_todo_write_signal_contains_unknown_exceptions_privately(
         app, qt_application, monkeypatch, caplog):
-    from PySide6.QtWidgets import QDialog, QMessageBox
+    from PySide6.QtWidgets import QDialog
 
     focused = app.todo.add_task("focused", Horizon.SHORT)
     other = app.todo.add_task("other", Horizon.SHORT)
     done = app.todo.add_task("done", Horizon.SHORT)
     app.todo.complete(done.id)
+    # a visible child keeps the completed task in the main list as the
+    # dimmed structure path (V12-05), so its restore button is reachable
+    app.todo.add_subtask(done.id, "done-child-context")
     app.todo.start_focus(focused.id)
     app._open_control_panel("todo")
     page = app._panel._built["todo"]
@@ -1841,7 +1860,7 @@ def test_every_todo_write_signal_contains_unknown_exceptions_privately(
         ("set_due_date", "设截止", other.id),
         ("start_focus", "开始处理", other.id),
         ("stop_focus", "停止处理", focused.id),
-        ("delete_subtree", "删除（含子任务）", other.id),
+        ("archive_subtree", "归档子树", other.id),
     )
 
     with caplog.at_level(logging.ERROR):
@@ -1866,10 +1885,6 @@ def test_every_todo_write_signal_contains_unknown_exceptions_privately(
                         lambda _task: ("set", date(2099, 12, 31)),
                         raising=False)
                     scoped.setattr(QDialog, "exec", lambda _dialog: 1)
-                if method_name == "delete_subtree":
-                    scoped.setattr(
-                        QMessageBox, "question",
-                        lambda *_args, **_kwargs: QMessageBox.Yes)
 
                 button = _todo_button(page, button_text)
                 assert button.isEnabled(), (method_name, button_text)
@@ -1929,6 +1944,132 @@ def test_todo_write_signal_maps_expected_failures_to_stable_status(
     assert "CANARY" not in page.status.text()
 
 
+# -- CR-U01: 恢复 covers every done/archived combination, via real buttons ------
+
+
+def test_restore_button_covers_every_done_archived_combination(
+        app, qt_application):
+    from retirement_pet.todo import Horizon, Status
+
+    open_task = app.todo.add_task("组合-进行中", Horizon.SHORT)
+    done_task = app.todo.add_task("组合-已完成", Horizon.SHORT)
+    app.todo.complete(done_task.id)
+    app._open_control_panel("todo")
+    page = app._panel._built["todo"]
+    restore = _todo_button(page, "恢复")
+    archived_index = next(i for i in range(page.view_box.count())
+                          if page.view_box.itemText(i).startswith("已归档"))
+    done_index = next(i for i in range(page.view_box.count())
+                      if page.view_box.itemText(i).startswith("已完成"))
+
+    # open + not archived: nothing to restore
+    page.tree.setCurrentItem(_tree_item_by_id(page.tree, open_task.id))
+    qt_application.processEvents()
+    assert not restore.isEnabled()
+
+    # done + not archived: restore reopens the task (visible in 已完成)
+    page.view_box.setCurrentIndex(done_index)
+    page.refresh()
+    page.tree.setCurrentItem(_tree_item_by_id(page.tree, done_task.id))
+    qt_application.processEvents()
+    assert restore.isEnabled()
+    restore.click()
+    qt_application.processEvents()
+    assert app.todo.get(done_task.id).status is Status.OPEN
+
+    # open + archived (unarchive keeps the open state)
+    app.todo.archive_subtree(open_task.id)
+    page.view_box.setCurrentIndex(archived_index)
+    page.refresh()
+    page.tree.setCurrentItem(_tree_item_by_id(page.tree, open_task.id))
+    qt_application.processEvents()
+    assert restore.isEnabled()
+    restore.click()
+    qt_application.processEvents()
+    assert app.todo.get(open_task.id).archived is False
+    assert app.todo.get(open_task.id).status is Status.OPEN
+
+    # done + archived (CR-U01 core): restore unarchives and KEEPS done,
+    # then the done entry offers the normal reopen
+    app.todo.complete(done_task.id)
+    app.todo.archive_subtree(done_task.id)
+    page.view_box.setCurrentIndex(archived_index)
+    page.refresh()
+    page.tree.setCurrentItem(_tree_item_by_id(page.tree, done_task.id))
+    qt_application.processEvents()
+    assert restore.isEnabled(), "done+archived must be restorable"
+    restore.click()
+    qt_application.processEvents()
+    assert app.todo.get(done_task.id).archived is False
+    assert app.todo.get(done_task.id).status is Status.DONE
+
+    page.view_box.setCurrentIndex(done_index)
+    page.refresh()
+    page.tree.setCurrentItem(_tree_item_by_id(page.tree, done_task.id))
+    qt_application.processEvents()
+    assert restore.isEnabled()
+    restore.click()
+    qt_application.processEvents()
+    assert app.todo.get(done_task.id).status is Status.OPEN
+
+
+def test_restore_buttons_cover_done_root_done_leaf_and_mixed_subtree(
+        app, qt_application):
+    from retirement_pet.todo import Horizon, Status
+
+    # a COMPLETED root with an open child
+    done_root = app.todo.add_task("已完成根", Horizon.SHORT)
+    root_child = app.todo.add_subtask(done_root.id, "根的子任务")
+    app.todo.complete(done_root.id)
+    # a done LEAF under an open parent
+    open_parent = app.todo.add_task("进行中父", Horizon.SHORT)
+    done_leaf = app.todo.add_subtask(open_parent.id, "已完成叶子")
+    app.todo.complete(done_leaf.id)
+    # a mixed subtree (open root, done grandchild)
+    mixed_root = app.todo.add_task("混合根", Horizon.SHORT)
+    mixed_child = app.todo.add_subtask(mixed_root.id, "混合子")
+    mixed_grand = app.todo.add_subtask(mixed_child.id, "混合孙")
+    app.todo.complete(mixed_grand.id)
+
+    for archived_root in (done_root, done_leaf, mixed_root):
+        app.todo.archive_subtree(archived_root.id)
+    app._open_control_panel("todo")
+    page = app._panel._built["todo"]
+    restore = _todo_button(page, "恢复")
+    archived_index = next(i for i in range(page.view_box.count())
+                          if page.view_box.itemText(i).startswith("已归档"))
+    page.view_box.setCurrentIndex(archived_index)
+    page.refresh()
+
+    page.tree.setCurrentItem(_tree_item_by_id(page.tree, done_root.id))
+    qt_application.processEvents()
+    assert restore.isEnabled()
+    restore.click()
+    qt_application.processEvents()
+    assert app.todo.get(done_root.id).status is Status.DONE
+    assert app.todo.get(done_root.id).archived is False
+    assert app.todo.get(root_child.id).archived is False
+
+    page.refresh()
+    page.tree.setCurrentItem(_tree_item_by_id(page.tree, done_leaf.id))
+    qt_application.processEvents()
+    assert restore.isEnabled()
+    restore.click()
+    qt_application.processEvents()
+    assert app.todo.get(done_leaf.id).status is Status.DONE
+    assert app.todo.get(done_leaf.id).archived is False
+
+    page.refresh()
+    page.tree.setCurrentItem(_tree_item_by_id(page.tree, mixed_root.id))
+    qt_application.processEvents()
+    assert restore.isEnabled()
+    restore.click()
+    qt_application.processEvents()
+    assert app.todo.get(mixed_grand.id).status is Status.DONE
+    assert all(app.todo.get(entry.id).archived is False
+               for entry in (mixed_root, mixed_child, mixed_grand))
+
+
 def test_unavailable_todo_page_is_read_only_and_preserves_store_family(
         tmp_path, qt_application, monkeypatch):
     from PySide6.QtCore import Qt
@@ -1976,10 +2117,11 @@ def test_unavailable_todo_page_is_read_only_and_preserves_store_family(
         pet.shutdown()
 
 
-def test_delete_cancel_is_noop_and_confirm_deletes_whole_subtree_once(
+def test_archive_button_archives_whole_subtree_once_without_confirmation(
         app, qt_application, monkeypatch):
-    from PySide6.QtWidgets import QMessageBox
-
+    # V12-05: the user-facing removal path is the REVERSIBLE subtree
+    # archive; it runs once, needs no confirm dialog and reports the
+    # affected count instead of physically deleting anything
     root = app.todo.add_task("root", Horizon.SHORT)
     child = app.todo.add_subtask(root.id, "child")
     grandchild = app.todo.add_subtask(child.id, "grandchild")
@@ -1987,38 +2129,24 @@ def test_delete_cancel_is_noop_and_confirm_deletes_whole_subtree_once(
     page = app._panel._built["todo"]
     page.tree.setCurrentItem(_tree_item_by_id(page.tree, root.id))
     calls = []
-    prompts = []
-    real_delete = app.todo.delete_subtree
+    real_archive = app.todo.archive_subtree
 
-    def counted_delete(task_id):
+    def counted_archive(task_id):
         calls.append(task_id)
-        return real_delete(task_id)
+        return real_archive(task_id)
 
-    monkeypatch.setattr(app.todo, "delete_subtree", counted_delete)
-
-    def cancel_question(_parent, _title, message):
-        prompts.append(message)
-        return QMessageBox.No
-
-    monkeypatch.setattr(QMessageBox, "question", cancel_question)
-    _todo_button(page, "删除（含子任务）").click()
-    assert calls == []
-    assert {task.id for task in app.todo.all_tasks()} >= {
-        root.id, child.id, grandchild.id}
-    assert "该任务及全部子任务" in prompts[-1]
-    assert "直接子任务" not in prompts[-1]
-
-    page.tree.setCurrentItem(_tree_item_by_id(page.tree, root.id))
-    monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *_args, **_kwargs: QMessageBox.Yes)
-    _todo_button(page, "删除（含子任务）").click()
+    monkeypatch.setattr(app.todo, "archive_subtree", counted_archive)
+    _todo_button(page, "归档子树").click()
     qt_application.processEvents()
     assert calls == [root.id]
-    assert app.todo.get(root.id) is None
-    assert app.todo.get(child.id) is None
-    assert app.todo.get(grandchild.id) is None
-    assert page.status.text() == "已删除 3 个任务"
+    assert app.todo.get(root.id).archived is True
+    assert app.todo.get(child.id).archived is True
+    assert app.todo.get(grandchild.id).archived is True
+    assert page.status.text().startswith("已归档 3 个任务")
+
+    # the archived tree is restorable from the "已归档" entry
+    app.todo.restore_archived(root.id)
+    assert app.todo.get(grandchild.id).archived is False
 
 
 def test_todo_event_subscription_is_idempotent_and_page_lifecycle_is_active_only(
@@ -2206,7 +2334,7 @@ def test_keyboard_f2_delete_and_return_share_real_write_paths(
         app, qt_application, monkeypatch):
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QLineEdit, QMessageBox
+    from PySide6.QtWidgets import QLineEdit
 
     task = app.todo.add_task("keyboard-original", Horizon.SHORT)
     app._open_control_panel("todo")
@@ -2232,22 +2360,22 @@ def test_keyboard_f2_delete_and_return_share_real_write_paths(
                    if entry.title == "return-created")
     assert created.horizon is Horizon.SHORT
 
-    delete_calls = []
-    real_delete = app.todo.delete_subtree
+    # Delete archives the subtree through the real service write path
+    # (reversible; no confirm dialog since V12-05)
+    archive_calls = []
+    real_archive = app.todo.archive_subtree
 
-    def counted_delete(task_id):
-        delete_calls.append(task_id)
-        return real_delete(task_id)
+    def counted_archive(task_id):
+        archive_calls.append(task_id)
+        return real_archive(task_id)
 
-    monkeypatch.setattr(app.todo, "delete_subtree", counted_delete)
-    monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *_args, **_kwargs: QMessageBox.Yes)
+    monkeypatch.setattr(app.todo, "archive_subtree", counted_archive)
     page.tree.setCurrentItem(_tree_item_by_id(page.tree, task.id))
     page.tree.setFocus()
     QTest.keyClick(page.tree, Qt.Key_Delete)
     qt_application.processEvents()
-    assert delete_calls == [task.id]
+    assert archive_calls == [task.id]
+    assert app.todo.get(task.id).archived is True
 
 
 def test_action_states_and_two_row_layout_fit_720_by_480(
@@ -2265,7 +2393,8 @@ def test_action_states_and_two_row_layout_fit_720_by_480(
     page = panel._built["todo"]
     labels = (
         "完成", "恢复", "重命名", "加子任务", "上移", "下移",
-        "改周期", "设截止", "开始处理", "停止处理", "删除（含子任务）",
+        "改周期", "设截止", "开始处理", "停止处理",
+        "切换重要", "切换紧急", "归档子树",
     )
     buttons = [_todo_button(page, label) for label in labels]
     assert panel.width() == 720
@@ -2277,7 +2406,6 @@ def test_action_states_and_two_row_layout_fit_720_by_480(
         origin = button.mapTo(page, QPoint(0, 0))
         geometry = QRect(origin, button.size())
         assert page_rect.contains(geometry)
-        assert button.width() >= min(72, button.sizeHint().width())
         button_rects.append(geometry)
     rows = {geometry.y() for geometry in button_rects}
     assert len(rows) == 2
@@ -2285,6 +2413,10 @@ def test_action_states_and_two_row_layout_fit_720_by_480(
         for right in button_rects[index + 1:]:
             if left.y() == right.y():
                 assert not left.intersects(right)
+    # 13 buttons share two rows now (V12-05 quadrant/archive buttons);
+    # the click-target floor per button is 64 px, still no clipped text
+    for button in buttons:
+        assert button.width() >= min(64, button.sizeHint().width())
 
     assert all(not button.isEnabled() for button in buttons)
     page.tree.setCurrentItem(_tree_item_by_id(page.tree, open_task.id))
@@ -2299,6 +2431,12 @@ def test_action_states_and_two_row_layout_fit_720_by_480(
     assert not _todo_button(page, "开始处理").isEnabled()
     assert _todo_button(page, "停止处理").isEnabled()
 
+    # completed tasks left the main list (V12-05): switch to the "已完成"
+    # entry to restore one
+    done_index = next(index for index in range(page.view_box.count())
+                      if page.view_box.itemText(index).startswith("已完成"))
+    page.view_box.setCurrentIndex(done_index)
+    qt_application.processEvents()
     page.tree.setCurrentItem(_tree_item_by_id(page.tree, done_task.id))
     qt_application.processEvents()
     assert not _todo_button(page, "完成").isEnabled()

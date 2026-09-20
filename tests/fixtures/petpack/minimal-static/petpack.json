@@ -138,6 +138,7 @@
   },
   "id": "minimal-static",
   "publisher_id": "community.retirementpet",
+  "publisher_ref": "community.retirementpet",
   "version": "1.0.0"
  },
  "publishers": [

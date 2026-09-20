@@ -141,6 +141,10 @@ class SettingsStore:
         for key, value in values.items():
             self.set(key, value)
 
+    def discard(self, key: str) -> None:
+        """Remove a key entirely; restoring a default needs no validation."""
+        self._data.pop(key, None)
+
     def as_dict(self) -> dict[str, Any]:
         return dict(self._data)
 

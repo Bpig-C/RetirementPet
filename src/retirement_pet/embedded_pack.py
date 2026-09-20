@@ -26,7 +26,7 @@ from retirement_pet.resource_path import asset_path
 logger = logging.getLogger(__name__)
 
 EMBEDDED_PACK_RELPATH = (
-    "petpack", "retirement-cat-official-1.0.1.petpack")
+    "petpack", "retirement-cat-official-1.0.2.petpack")
 LEGACY_EMBEDDED_PACK_RELPATH = (
     "petpack", "retirement-cat-official.petpack")
 EMBEDDED_TRUST_CHANNEL = "BUILTIN_OFFICIAL"
@@ -39,7 +39,7 @@ LEGACY_ARCHIVE_SHA256 = \
 LEGACY_CONTENT_DIGEST = \
     "86684d32136c205a043995f4889b857c08d6496743047a77165ad72895bdb1ce"
 LEGACY_PACKAGE_VERSION = "1.0.0"
-CURRENT_PACKAGE_VERSION = "1.0.1"
+CURRENT_PACKAGE_VERSION = "1.0.2"
 OFFICIAL_CHARACTER_FQID = \
     "official.retirement-cat-official.retirement-cat.cat"
 

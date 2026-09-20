@@ -26,8 +26,8 @@ from retirement_pet.switcher import (
 ROOT = Path(__file__).resolve().parent.parent
 REF_PACK = ROOT / "tests" / "fixtures" / "petpack" / "minimal-static.petpack"
 OFFICIAL_CAT = ROOT / "assets" / "petpack" / "retirement-cat-official.petpack"
-OFFICIAL_CAT_V101 = ROOT / "assets" / "petpack" / \
-    "retirement-cat-official-1.0.1.petpack"
+OFFICIAL_CAT_CURRENT = ROOT / "assets" / "petpack" / \
+    "retirement-cat-official-1.0.2.petpack"
 
 
 @pytest.fixture()
@@ -93,10 +93,10 @@ def test_catalog_excludes_unready_paths(library):
     assert all(e.builtin for e in catalog.entries())
 
 
-def test_catalog_hides_only_exact_legacy_builtin_when_v101_is_ready(library):
+def test_catalog_hides_only_exact_legacy_builtin_when_current_is_ready(library):
     from retirement_pet.embedded_pack import LEGACY_CONTENT_DIGEST
 
-    current = library.register_builtin_release(OFFICIAL_CAT_V101)
+    current = library.register_builtin_release(OFFICIAL_CAT_CURRENT)
     records = library.list_revisions()
     assert any(
         record.revision_key.content_digest == LEGACY_CONTENT_DIGEST
@@ -107,7 +107,7 @@ def test_catalog_hides_only_exact_legacy_builtin_when_v101_is_ready(library):
         if entry.package_id == "retirement-cat-official"
     ]
     assert len(official_entries) == 1
-    assert official_entries[0].package_version == "1.0.1"
+    assert official_entries[0].package_version == "1.0.2"
     assert official_entries[0].revision_key == current.revision_key
 
 

@@ -684,6 +684,18 @@ class PackLibrary:
                 self._db.execute(
                     "ALTER TABLE revisions ADD COLUMN builtin INTEGER NOT NULL"
                     " DEFAULT 0")
+            # V12-07: deletions whose media is file-locked wait here and
+            # are retried on the next open; the catalog row stays visible
+            # (marked pending) until the trash move really succeeds.
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS pending_deletes ("
+                " publisher_id TEXT NOT NULL,"
+                " package_id TEXT NOT NULL,"
+                " package_version TEXT NOT NULL,"
+                " content_digest TEXT NOT NULL,"
+                " requested_at TEXT NOT NULL,"
+                " PRIMARY KEY (publisher_id, package_id, package_version,"
+                "              content_digest))")
             self._db.execute("COMMIT")
         except Exception:
             if self._db.in_transaction:
@@ -795,6 +807,80 @@ class PackLibrary:
                 "receipt_sha256": intent["receipt_sha256"],
             },
         ))
+
+    # -- activation audit (review P-3) ---------------------------------------
+
+    def record_activation_committed(self, *, publisher_id: str,
+                                    package_id: str, package_version: str,
+                                    content_digest: str, character_fqid: str,
+                                    generation: int, commit_sequence: int,
+                                    recovered: bool = False) -> bool:
+        """Append the append-only ACTIVATE_COMMITTED audit line (review P-3).
+
+        The ACTIVE row remains the only selection authority; this journal
+        entry exists so the sequence of confirmed activations survives in
+        the same append-only facility as INSTALL_COMMITTED.  Idempotent on
+        (revision, generation, commit_sequence): a re-append attempt for an
+        already-journaled activation is a no-op.  I/O failures are logged
+        and reported as ``False`` - a journal problem must never fail a
+        confirmed switch nor be allowed to fake one.  Bootstrap libraries
+        (degraded, in-memory) have no journal and record nothing.
+        """
+        if self.degraded:
+            return False
+        revision = str(RevisionKey(
+            pack=PackKey(publisher_id, package_id),
+            package_version=package_version, content_digest=content_digest))
+        if self._activation_event_exists(revision, generation,
+                                         commit_sequence):
+            return True
+        try:
+            self._append_event(LifecycleEvent(
+                "ACTIVATE_COMMITTED", revision,
+                datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                {
+                    "publisher_id": publisher_id,
+                    "package_id": package_id,
+                    "package_version": package_version,
+                    "content_digest": content_digest,
+                    "character_fqid": character_fqid,
+                    "generation": generation,
+                    "commit_sequence": commit_sequence,
+                    "recovered": bool(recovered),
+                },
+            ))
+        except LifecycleError:
+            logger.exception("ACTIVATE_COMMITTED journal append failed")
+            return False
+        return True
+
+    def _activation_event_exists(self, revision: str, generation: int,
+                                 commit_sequence: int) -> bool:
+        path = self.journal_dir / "events.jsonl"
+        if not path.is_file():
+            return False
+        try:
+            data = self._read_managed_bytes(path)
+        except LifecycleError:
+            logger.warning(
+                "activation journal unreadable; treating event as missing")
+            return False
+        for line_number, raw_line in enumerate(data.splitlines(), start=1):
+            if not raw_line.strip():
+                continue
+            try:
+                event = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                logger.warning(
+                    "ignoring malformed lifecycle event line %d", line_number)
+                continue
+            if (isinstance(event, dict)
+                    and event.get("event") == "ACTIVATE_COMMITTED"
+                    and event.get("revision") == revision
+                    and event.get("generation") == generation
+                    and event.get("commit_sequence") == commit_sequence):
+                return True
+        return False
 
     def _write_intent(self, intent: dict) -> Path:
         path = self.journal_dir / f"intent-{intent['transaction_id']}.json"
@@ -1283,6 +1369,116 @@ class PackLibrary:
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
             {"trash": trash_target.name}))
         return True
+
+    # -- V12-07: user-facing safe uninstall --------------------------------------
+
+    def pending_delete_keys(self) -> list[RevisionKey]:
+        """Revisions whose deletion is scheduled and waiting for a restart."""
+        rows = self._db.execute(
+            "SELECT publisher_id, package_id, package_version,"
+            " content_digest FROM pending_deletes").fetchall()
+        return [RevisionKey(pack=PackKey(row[0], row[1]),
+                            package_version=row[2],
+                            content_digest=row[3]) for row in rows]
+
+    def request_uninstall(self, rk: RevisionKey,
+                          *, active_guard=None) -> str:
+        """UI entry for uninstalling one local revision (V12-07).
+
+        Returns ``"uninstalled"`` when the media moved to trash now, or
+        ``"pending_delete"`` when the OS still holds the files - the
+        revision stays listed (marked pending) and the deletion resumes
+        on the next library open.  Raises LifecycleError for builtin
+        revisions, unknown revisions, and anything the caller's guard
+        protects (the active selection and the restore basis).
+        """
+        record = self.get_revision(rk)
+        if record is None:
+            raise LifecycleError("PPK-LCY-E005", "unknown revision")
+        if record.builtin or self.is_builtin(rk):
+            raise LifecycleError("PPK-LCY-E005",
+                                 "refusing to uninstall a builtin official"
+                                 " revision")
+        if active_guard is not None and active_guard(rk):
+            raise LifecycleError(
+                "PPK-LCY-E005",
+                "revision is in use or is the restore basis; switch away"
+                " from it first")
+        try:
+            moved = self.uninstall_revision(rk)
+        except OSError:
+            # Locked media on Windows: moving fails, so the deletion
+            # becomes a durable, visible pending state instead of a
+            # silent failure or a half-deleted catalog row.
+            with self._db:
+                self._db.execute(
+                    "INSERT OR REPLACE INTO pending_deletes VALUES"
+                    " (?,?,?,?,?)",
+                    (*self._row_of(rk),
+                     datetime.now(timezone.utc).isoformat(
+                         timespec="seconds")))
+            self._append_event(LifecycleEvent(
+                "UNINSTALL_PENDING", str(rk),
+                datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                {"reason": "media_locked"}))
+            return "pending_delete"
+        return "uninstalled"
+
+    def cancel_pending_delete(self, rk: RevisionKey, *, reason: str) -> bool:
+        """Withdraw a scheduled deletion (V12-07 L07-01).
+
+        The catalog row and media are kept untouched; the state closes
+        with an UNINSTALL_CANCELLED event so no half-pending revision
+        remains.
+        """
+        with self._db:
+            cursor = self._db.execute(
+                "DELETE FROM pending_deletes WHERE"
+                " publisher_id=? AND package_id=? AND"
+                " package_version=? AND content_digest=?",
+                self._row_of(rk))
+            cancelled = cursor.rowcount > 0
+        if cancelled:
+            self._append_event(LifecycleEvent(
+                "UNINSTALL_CANCELLED", str(rk),
+                datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                {"reason": reason}))
+        return cancelled
+
+    def recover_pending_deletes(self, active_guard=None) -> int:
+        """Resume scheduled deletions (V12-07 L07-01).
+
+        Called by the application once its selection facts are readable -
+        NOT at library construction, which runs before the selection
+        store exists.  ``active_guard`` is evaluated NOW against the
+        fresh persisted facts: a revision that has become the active
+        selection or the restore basis since the delete was requested is
+        never deleted; its pending state is cancelled instead (an
+        explicit reselection outweighs the earlier delete request).
+        Media that has already disappeared finishes its bookkeeping so
+        no selectable-but-media-less entry survives.
+        """
+        recovered = 0
+        for rk in self.pending_delete_keys():
+            if active_guard is not None and active_guard(rk):
+                self.cancel_pending_delete(rk, reason="protected_selection")
+                recovered += 1
+                continue
+            try:
+                # uninstall_revision also handles vanished media: it
+                # removes the catalog row and records the event, so the
+                # pending row is all that remains to clean up.
+                self.uninstall_revision(rk)
+            except OSError:
+                continue  # still locked: stays pending, stays marked
+            with self._db:
+                self._db.execute(
+                    "DELETE FROM pending_deletes WHERE"
+                    " publisher_id=? AND package_id=? AND"
+                    " package_version=? AND content_digest=?",
+                    self._row_of(rk))
+            recovered += 1
+        return recovered
 
     # -- receipts -----------------------------------------------------------------
 

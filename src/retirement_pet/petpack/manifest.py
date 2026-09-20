@@ -211,4 +211,60 @@ def validate_manifest_structure(manifest: dict,
         _fail(Diagnostic(MAN_E004_MISSING_OR_INVALID_FIELD, Severity.ERROR,
                          "manifest_schema", "petpack.manifest.assets", {}))
 
+    _validate_compatibility_structure(manifest.get("compatibility"))
+
     return PackKey(publisher_id=publisher_id, package_id=package_id)
+
+
+def _validate_compatibility_structure(compatibility: Any) -> None:
+    """Shape-level compatibility checks (PETPACK_SPEC 5).
+
+    Value-level decisions (engine range containment, capability support)
+    belong to the validator, which owns the engine facts registry.
+    """
+    if compatibility is None:
+        return  # no constraint declared; unknown semantics still fail closed
+    if not isinstance(compatibility, dict):
+        _fail(Diagnostic(MAN_E004_MISSING_OR_INVALID_FIELD, Severity.ERROR,
+                         "manifest_schema", "petpack.manifest.compatibility",
+                         {}))
+    lower = compatibility.get("engine_min")
+    upper = compatibility.get("engine_max_exclusive")
+    for bound in (lower, upper):
+        if bound is None:
+            continue
+        if (not isinstance(bound, str) or len(bound) > MAX_SEMVER_LEN
+                or not _SEMVER_RE.match(bound)):
+            _fail(Diagnostic(MAN_E004_MISSING_OR_INVALID_FIELD, Severity.ERROR,
+                             "manifest_schema",
+                             "petpack.manifest.engine_range", {}))
+    if lower is not None and upper is not None:
+        if not semver_less(lower, upper):
+            _fail(Diagnostic(MAN_E004_MISSING_OR_INVALID_FIELD, Severity.ERROR,
+                             "manifest_schema",
+                             "petpack.manifest.engine_range", {}))
+    for key in ("required_capabilities", "optional_capabilities"):
+        values = compatibility.get(key)
+        if values is None:
+            continue
+        if not isinstance(values, list) or len(values) > 64:
+            _fail(Diagnostic(MAN_E004_MISSING_OR_INVALID_FIELD, Severity.ERROR,
+                             "manifest_schema",
+                             "petpack.manifest.capabilities", {}))
+        for value in values:
+            if (not isinstance(value, str) or not value or len(value) > 128
+                    or not value.replace(".", "").replace("_", "")
+                    .replace("-", "").isalnum()):
+                _fail(Diagnostic(MAN_E004_MISSING_OR_INVALID_FIELD,
+                                 Severity.ERROR, "manifest_schema",
+                                 "petpack.manifest.capabilities", {}))
+
+
+def semver_less(left: str, right: str) -> bool:
+    """Strict ordering for the plain ``X.Y.Z`` prefixes of two semvers."""
+    def core(version: str) -> tuple[int, int, int]:
+        body = version.split("+", 1)[0].split("-", 1)[0]
+        parts = body.split(".")
+        return (int(parts[0]), int(parts[1]), int(parts[2]))
+
+    return core(left) < core(right)

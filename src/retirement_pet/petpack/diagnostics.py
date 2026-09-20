@@ -63,6 +63,15 @@ MAN_E007_UNDECLARED_OR_MISSING_FILE = "PPK-MAN-E007"
 MAN_E008_SIZE_OR_HASH_MISMATCH = "PPK-MAN-E008"
 MAN_E009_RESERVED_NAMESPACE_OR_TRUST = "PPK-MAN-E009"
 
+# Extensions to spec 19.1 (recorded for master review):
+# - an unknown recommended layout ID is a WARNING the engine ignores (spec 13);
+# - a frozen historical pack missing the spec-6.1 required publisher_ref is
+#   loadable only through the exact-revision legacy allowlist (validator);
+# - an undrawable bound action on a NON-idle semantic is disabled with a
+#   usable idle fallback.  An undrawable core.idle is never a warning.
+MAN_W001_UNKNOWN_RECOMMENDATION = "PPK-MAN-W001"
+MAN_W002_HISTORICAL_PUBLISHER_REF_EXEMPT = "PPK-MAN-W002"
+
 # -- resources (PPK-RES-*) -----------------------------------------------------
 
 RES_E001_DISALLOWED_TYPE_OR_MIME = "PPK-RES-E001"
@@ -80,6 +89,17 @@ ACT_E004_UNSUPPORTED_RENDERER = "PPK-ACT-E004"
 ACT_E005_MISSING_ASSET_OR_TYPE = "PPK-ACT-E005"
 ACT_E006_TIMING_LOOP_OR_BUDGET = "PPK-ACT-E006"
 ACT_E007_SYSTEM_TRIGGER_REQUESTED = "PPK-ACT-E007"
+
+# Degradable action facts (extension to spec 19.1, recorded for master
+# review): an action the engine cannot draw or trigger is DISABLED and the
+# pack is ACCEPT_WITH_DEGRADATION instead of silently pretending support.
+#   PPK-ACT-W001: core semantic unknown to the engine but its exact
+#                 capability is declared optional (disabled per spec 11);
+#   PPK-ACT-W002: renderer kind the runtime cannot draw (layered template
+#                 bound outside a rig share, or builtin_effect) - the action
+#                 falls back to core.idle at runtime.
+ACT_W001_SEMANTIC_DISABLED = "PPK-ACT-W001"
+ACT_W002_RENDERER_UNSUPPORTED = "PPK-ACT-W002"
 
 TXT_E001_FORBIDDEN_TEMPLATE_OR_EXPR = "PPK-TXT-E001"
 TXT_E002_INVALID_PROFILE = "PPK-TXT-E002"

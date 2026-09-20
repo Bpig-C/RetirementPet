@@ -19,3 +19,4 @@ htmlcov/
 *.key
 *.pfx
 *.p12
+.acceptance-probe/

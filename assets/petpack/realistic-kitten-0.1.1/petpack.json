@@ -1,0 +1,452 @@
+{
+  "schema_version": "1.0",
+  "package": {
+    "publisher_id": "community.retirementpet",
+    "publisher_ref": "community.retirementpet",
+    "id": "realistic-kitten",
+    "version": "0.1.1",
+    "display_name": {
+      "zh-CN": "真实幼猫",
+      "en": "Realistic Kitten"
+    }
+  },
+  "publishers": [
+    {
+      "id": "community.retirementpet",
+      "display_name": "RetirementPet Project",
+      "contact": null,
+      "homepage": null
+    }
+  ],
+  "series": {
+    "id": "realistic",
+    "display_name": {
+      "zh-CN": "写实系列"
+    }
+  },
+  "sources": [
+    {
+      "id": "source.original",
+      "kind": "original_creation",
+      "title": "Realistic kitten original art",
+      "creator": "community.retirementpet",
+      "locator": null,
+      "accessed_at": null
+    }
+  ],
+  "rights_declarations": [
+    {
+      "id": "rights.original",
+      "basis": "original",
+      "claimant_ref": "community.retirementpet",
+      "attribution": "RetirementPet Project",
+      "license": {
+        "spdx": null,
+        "custom_name": "RetirementPet Project License",
+        "legal_file_ref": "legal.license"
+      },
+      "scope_claimed": [
+        "personal_use",
+        "redistribution"
+      ],
+      "notes": null
+    }
+  ],
+  "legal_files": [
+    {
+      "id": "legal.license",
+      "path": "legal/license.txt",
+      "media_type": "text/plain",
+      "purpose": "license_text",
+      "byte_size": 626,
+      "sha256": "c7e6098feff624b0f1c4b39d56d2ccc4222eb3274caa02a0b2ec5b56493f80cc"
+    }
+  ],
+  "assets": [
+    {
+      "id": "asset.idle",
+      "path": "assets/idle-closed.png",
+      "media_type": "image/png",
+      "byte_size": 297281,
+      "sha256": "2ec8eda7ea2fbe95803381bc6eb76eba036c9677399b27656bd889c6fe4e91b2",
+      "properties": {
+        "width": 512,
+        "height": 512
+      },
+      "rights_ref": "rights.original",
+      "source_ref": "source.original"
+    },
+    {
+      "id": "asset.work",
+      "path": "assets/work.png",
+      "media_type": "image/png",
+      "byte_size": 249647,
+      "sha256": "92c5460cf0fe195904ba1ec44b7de1a255e812d252b6f52d3dbd5375e5afc4f5",
+      "properties": {
+        "width": 512,
+        "height": 512
+      },
+      "rights_ref": "rights.original",
+      "source_ref": "source.original"
+    },
+    {
+      "id": "asset.rest",
+      "path": "assets/rest-yawn.png",
+      "media_type": "image/png",
+      "byte_size": 323589,
+      "sha256": "4da48abe187bfb087e3aaf25bbab69b085c816d0573b9fb8f6f632537fab9b81",
+      "properties": {
+        "width": 512,
+        "height": 512
+      },
+      "rights_ref": "rights.original",
+      "source_ref": "source.original"
+    },
+    {
+      "id": "asset.eat",
+      "path": "assets/eat.png",
+      "media_type": "image/png",
+      "byte_size": 284552,
+      "sha256": "9c243295f4516cf30ea5afb15228cf6d677920f9562500d4c951999a1405a726",
+      "properties": {
+        "width": 512,
+        "height": 512
+      },
+      "rights_ref": "rights.original",
+      "source_ref": "source.original"
+    },
+    {
+      "id": "asset.exercise",
+      "path": "assets/exercise.png",
+      "media_type": "image/png",
+      "byte_size": 311343,
+      "sha256": "fbeefd798944b3e38310025f7560d97e660a2e65d362bec657140c9938a20b2f",
+      "properties": {
+        "width": 512,
+        "height": 512
+      },
+      "rights_ref": "rights.original",
+      "source_ref": "source.original"
+    },
+    {
+      "id": "asset.meeting",
+      "path": "assets/meeting.png",
+      "media_type": "image/png",
+      "byte_size": 289208,
+      "sha256": "5179495497a61d4386241227fce52285b1e5edcdf237527ea5e542294c5ddca4",
+      "properties": {
+        "width": 512,
+        "height": 512
+      },
+      "rights_ref": "rights.original",
+      "source_ref": "source.original"
+    },
+    {
+      "id": "asset.music",
+      "path": "assets/music.png",
+      "media_type": "image/png",
+      "byte_size": 327591,
+      "sha256": "55587e3d22f6a6fb38249e9c97cf0cfbb7b62d38366ef7586a62a4a0e450c2f3",
+      "properties": {
+        "width": 512,
+        "height": 512
+      },
+      "rights_ref": "rights.original",
+      "source_ref": "source.original"
+    },
+    {
+      "id": "asset.meow",
+      "path": "assets/idle-meow.png",
+      "media_type": "image/png",
+      "byte_size": 314569,
+      "sha256": "1712953ccf98336256c06df9daabe2a8e41c01978ca9f25bae37702770f01687",
+      "properties": {
+        "width": 512,
+        "height": 512
+      },
+      "rights_ref": "rights.original",
+      "source_ref": "source.original"
+    }
+  ],
+  "actions": [
+    {
+      "id": "action.idle",
+      "semantic": "core.idle",
+      "loop_modes": [
+        "repeat"
+      ],
+      "policy_tags": [
+        "silent",
+        "meeting_safe",
+        "dnd_safe"
+      ],
+      "audio": null,
+      "interrupt": {
+        "policy": "immediate",
+        "max_exit_ms": 0
+      },
+      "user_modes": [
+        "auto",
+        "manual",
+        "disabled"
+      ],
+      "lifecycle": {
+        "loop": {
+          "renderer": {
+            "type": "static",
+            "asset": "asset.idle"
+          }
+        }
+      }
+    },
+    {
+      "id": "action.work",
+      "semantic": "core.work",
+      "loop_modes": [
+        "repeat"
+      ],
+      "policy_tags": [
+        "silent",
+        "meeting_safe",
+        "dnd_safe"
+      ],
+      "audio": null,
+      "interrupt": {
+        "policy": "immediate",
+        "max_exit_ms": 0
+      },
+      "user_modes": [
+        "auto",
+        "manual",
+        "disabled"
+      ],
+      "lifecycle": {
+        "loop": {
+          "renderer": {
+            "type": "static",
+            "asset": "asset.work"
+          }
+        }
+      }
+    },
+    {
+      "id": "action.rest",
+      "semantic": "core.rest",
+      "loop_modes": [
+        "repeat"
+      ],
+      "policy_tags": [
+        "silent",
+        "meeting_safe",
+        "dnd_safe"
+      ],
+      "audio": null,
+      "interrupt": {
+        "policy": "immediate",
+        "max_exit_ms": 0
+      },
+      "user_modes": [
+        "auto",
+        "manual",
+        "disabled"
+      ],
+      "lifecycle": {
+        "loop": {
+          "renderer": {
+            "type": "static",
+            "asset": "asset.rest"
+          }
+        }
+      }
+    },
+    {
+      "id": "action.eat",
+      "semantic": "core.eat",
+      "loop_modes": [
+        "repeat"
+      ],
+      "policy_tags": [
+        "silent",
+        "meeting_safe",
+        "dnd_safe"
+      ],
+      "audio": null,
+      "interrupt": {
+        "policy": "immediate",
+        "max_exit_ms": 0
+      },
+      "user_modes": [
+        "auto",
+        "manual",
+        "disabled"
+      ],
+      "lifecycle": {
+        "loop": {
+          "renderer": {
+            "type": "static",
+            "asset": "asset.eat"
+          }
+        }
+      }
+    },
+    {
+      "id": "action.exercise",
+      "semantic": "core.exercise",
+      "loop_modes": [
+        "repeat"
+      ],
+      "policy_tags": [
+        "silent",
+        "meeting_safe",
+        "dnd_safe"
+      ],
+      "audio": null,
+      "interrupt": {
+        "policy": "immediate",
+        "max_exit_ms": 0
+      },
+      "user_modes": [
+        "auto",
+        "manual",
+        "disabled"
+      ],
+      "lifecycle": {
+        "loop": {
+          "renderer": {
+            "type": "static",
+            "asset": "asset.exercise"
+          }
+        }
+      }
+    },
+    {
+      "id": "action.meeting",
+      "semantic": "core.meeting",
+      "loop_modes": [
+        "repeat"
+      ],
+      "policy_tags": [
+        "silent",
+        "meeting_safe",
+        "dnd_safe"
+      ],
+      "audio": null,
+      "interrupt": {
+        "policy": "immediate",
+        "max_exit_ms": 0
+      },
+      "user_modes": [
+        "auto",
+        "manual",
+        "disabled"
+      ],
+      "lifecycle": {
+        "loop": {
+          "renderer": {
+            "type": "static",
+            "asset": "asset.meeting"
+          }
+        }
+      }
+    },
+    {
+      "id": "action.music",
+      "semantic": "core.music",
+      "loop_modes": [
+        "repeat"
+      ],
+      "policy_tags": [
+        "silent",
+        "meeting_safe",
+        "dnd_safe"
+      ],
+      "audio": null,
+      "interrupt": {
+        "policy": "immediate",
+        "max_exit_ms": 0
+      },
+      "user_modes": [
+        "auto",
+        "manual",
+        "disabled"
+      ],
+      "lifecycle": {
+        "loop": {
+          "renderer": {
+            "type": "static",
+            "asset": "asset.music"
+          }
+        }
+      }
+    }
+  ],
+  "characters": [
+    {
+      "id": "kitten",
+      "display_name": {
+        "zh-CN": "真实幼猫"
+      },
+      "thumbnail_asset": "asset.idle",
+      "default_variant": null,
+      "variants": [],
+      "text_profile_refs": [],
+      "recommended_profiles": {},
+      "rig_bindings": {},
+      "rig_contract_ref": null,
+      "actions": {
+        "core.idle": "action.idle",
+        "core.work": "action.work",
+        "core.rest": "action.rest",
+        "core.eat": "action.eat",
+        "core.exercise": "action.exercise",
+        "core.meeting": "action.meeting",
+        "core.music": "action.music"
+      },
+      "geometry": {
+        "logical_canvas": {
+          "width": 512,
+          "height": 512
+        },
+        "base_anchor": {
+          "x": 256,
+          "y": 504
+        },
+        "bubble_anchor": {
+          "x": 256,
+          "y": 12
+        },
+        "content_bounds": {
+          "x": 56,
+          "y": 56,
+          "width": 400,
+          "height": 400
+        },
+        "motion_bounds": {
+          "x": 32,
+          "y": 32,
+          "width": 448,
+          "height": 448
+        },
+        "hit_regions": [
+          {
+            "shape": "rect",
+            "x": 56,
+            "y": 56,
+            "width": 400,
+            "height": 400
+          }
+        ],
+        "reference_height": 400
+      }
+    }
+  ],
+  "compatibility": {
+    "engine_min": "2.0.0",
+    "engine_max_exclusive": "3.0.0",
+    "required_capabilities": [
+      "renderer.static.v1",
+      "asset.png.v1"
+    ],
+    "optional_capabilities": []
+  }
+}

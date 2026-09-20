@@ -188,6 +188,13 @@ def main() -> int:
         command = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else "show"
         return 0 if send_command(command) else 1
 
+    # Agent CLI (V13-02): query/operate the RUNNING instance through the
+    # local agent protocol; never a second window or a second store.
+    if len(sys.argv) > 1 and sys.argv[1] == "agent":
+        from retirement_pet.agent_cli import run_cli
+
+        return run_cli(sys.argv[2:])
+
     from retirement_pet.app import PetApplication
 
     app = PetApplication(sys.argv)

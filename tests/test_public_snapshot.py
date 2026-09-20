@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import os
 from pathlib import Path
 import socket
@@ -268,8 +269,8 @@ def test_reserved_invalid_email_and_documentation_ip_are_allowed(tmp_path: Path)
                 "contact: fixture@example.invalid; endpoints: 192.0.2.44 and 2001:db8::44\n"
             ),
             "scripts/version_info.txt": (
-                'StringStruct("FileVersion", "1.1.1.0")\n'
-                'StringStruct("ProductVersion", "1.1.1.0")\n'
+                'StringStruct("FileVersion", "1.2.0.0")\n'
+                'StringStruct("ProductVersion", "1.2.0.0")\n'
             ),
         },
     )
@@ -650,3 +651,44 @@ def test_committed_public_policy_does_not_persist_a_private_username_hash():
         "src/retirement_pet/__init__.py",
         "tests/test_public_snapshot.py",
     } <= set(policy["required_paths"])
+
+
+def test_cr13_04_policy_excludes_luo_xiaohei_local_channel(tmp_path: Path):
+    """User ruling (CR13-04), stated EXACTLY (review RR13-04): the ONLY
+    Luo Xiaohei artefact in the tracked tree is the dedicated build
+    script, and the REAL policy (unmodified) excludes it.  No fixture
+    policy injection is involved."""
+    repo_root = Path(__file__).resolve().parent.parent
+    real_policy = json.loads(
+        (repo_root / "config" / "public_snapshot.json").read_text("utf-8"))
+    assert ("scripts/build_xiaohei_local.py"
+            in real_policy["additional_exclude_paths"])
+
+    # In the private repo the script exists and must be excluded; in a
+    # PUBLIC snapshot it was already excluded upstream, so the fixture
+    # simply omits it and the export must not resurrect it.
+    in_private_repo = (repo_root / "scripts"
+                       / "build_xiaohei_local.py").is_file()
+
+    additions = {}
+    if in_private_repo:
+        additions["scripts/build_xiaohei_local.py"] = (
+            b"import os\nimport sys\nfrom pathlib import Path\n"
+            b"print('local-only builder')\n")
+    root = _repo(tmp_path, additions)
+    # embed the REAL production policy verbatim (not the fixture POLICY):
+    # the exclusion under test lives in config/public_snapshot.json and
+    # this is the unmodified file the exporter will read (RR13-04)
+    (root / "config" / "public_snapshot.json").write_text(
+        (repo_root / "config" / "public_snapshot.json").read_text(
+            encoding="utf-8"), encoding="utf-8")
+    _git(root, "add", "--all")
+    _git(root, "-c", "user.name=Fixture",
+         "-c", "user.email=fixture@example.invalid",
+         "commit", "-m", "embed real policy")
+    output = tmp_path / "out"
+    public_export.export_snapshot(root, output)
+    exported = {p.relative_to(output).as_posix()
+                for p in output.rglob("*") if p.is_file()
+                and ".git" not in p.parts}
+    assert "scripts/build_xiaohei_local.py" not in exported

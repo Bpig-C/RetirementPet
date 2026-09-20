@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 _MIN_GEOMETRY = {
     "logical_canvas": {"width": 256, "height": 256},
     "content_bounds": {"x": 32, "y": 32, "width": 192, "height": 192},
+    "motion_bounds": {"x": 16, "y": 16, "width": 224, "height": 224},
     "base_anchor": {"x": 128, "y": 236},
     "bubble_anchor": {"x": 128, "y": 64},
     "reference_height": 192,
@@ -30,27 +31,46 @@ _MIN_GEOMETRY = {
 
 
 def _manifest(shared: bool) -> dict:
-    """Two characters, one series.  When ``shared``: both reference the same
-    layered template via rig_contract; otherwise each owns its frames."""
+    """Two characters, one series.  When ``shared``: both additionally bind
+    the same parameterized LAYERED template via rig_contract - bound to the
+    degradable non-idle semantic ``core.work``, because runtime admission
+    requires a drawable static/sequence core.idle per character (review
+    P-2).  Otherwise each owns all of its frames."""
     if shared:
-        idle_a = {
-            "id": "action.shared.idle",
-            "semantic": "core.idle",
+        # drawable per-character idles keep runtime admission open
+        idle_a = {"id": "action.boy.idle", "semantic": "core.idle",
+                  "lifecycle": {"loop": {"renderer": {
+                      "type": "sequence", "frames": [
+                          {"asset": "asset.body.boy", "duration_ms": 200}]}}}}
+        idle_b = {"id": "action.girl.idle", "semantic": "core.idle",
+                  "lifecycle": {"loop": {"renderer": {
+                      "type": "sequence", "frames": [
+                          {"asset": "asset.body.girl", "duration_ms": 200}]}}}}
+        # the SHARED layered template (rig rules need >=2 users of one
+        # action carrying an identical rig_contract_ref); undrawable
+        # non-idle actions degrade to PPK-ACT-W002 with idle fallback
+        shared_layered = {
+            "id": "action.shared.work",
+            "semantic": "core.work",
             "rig_contract_ref": "rig.chibi.v1",
             "lifecycle": {"loop": {"renderer": {"type": "layered",
-                                                "template": "tmpl.shared.idle"}}},
+                                                "template": "tmpl.shared.work"}}},
         }
-        idle_b = idle_a | {"id": "action.shared.idle.b"}
         # rig-contract characters bind their own body slot; the template is
         # parameterized and never references a concrete body asset
         a = {"id": "chiboy", "rig_contract_ref": "rig.chibi.v1",
              "rig_bindings": {"body": "asset.body.boy"},
-             "actions": {"core.idle": "action.shared.idle"},
+             "thumbnail_asset": "asset.body.boy",
+             "actions": {"core.idle": "action.boy.idle",
+                         "core.work": "action.shared.work"},
              "geometry": _MIN_GEOMETRY}
         b = {"id": "chigirl", "rig_contract_ref": "rig.chibi.v1",
              "rig_bindings": {"body": "asset.body.girl"},
-             "actions": {"core.idle": "action.shared.idle.b"},
+             "thumbnail_asset": "asset.body.girl",
+             "actions": {"core.idle": "action.girl.idle",
+                         "core.work": "action.shared.work"},
              "geometry": _MIN_GEOMETRY}
+        actions = [idle_a, idle_b, shared_layered]
     else:
         idle_a = {"id": "action.boy.idle", "semantic": "core.idle",
                   "lifecycle": {"loop": {"renderer": {
@@ -61,17 +81,25 @@ def _manifest(shared: bool) -> dict:
                       "type": "sequence", "frames": [
                           {"asset": "asset.body.girl", "duration_ms": 200}]}}}}
         a = {"id": "chiboy", "rig_contract_ref": None, "rig_bindings": {},
+             "thumbnail_asset": "asset.body.boy",
              "actions": {"core.idle": "action.boy.idle"},
              "geometry": _MIN_GEOMETRY}
         b = {"id": "chigirl", "rig_contract_ref": None, "rig_bindings": {},
+             "thumbnail_asset": "asset.body.girl",
              "actions": {"core.idle": "action.girl.idle"},
              "geometry": _MIN_GEOMETRY}
+        actions = [idle_a, idle_b]
 
     manifest = {
         "schema_version": "1.0",
-        "package": {"publisher_id": "community.example", "id": "duo-pack",
+        "package": {"publisher_id": "community.example",
+                    "publisher_ref": "community.example", "id": "duo-pack",
                     "version": "1.0.0", "display_name": {"zh-CN": "双子"}},
         "series": {"id": "duo", "display_name": {"zh-CN": "双子系列"}},
+        "publishers": [
+            {"id": "community.example", "display_name": "Example Author",
+             "homepage": None, "contact": None},
+        ],
         "rights_declarations": [
             {"id": "rights.original", "basis": "original",
              "claimant_ref": "community.example",
@@ -86,7 +114,7 @@ def _manifest(shared: bool) -> dict:
              "locator": None, "accessed_at": None},
         ],
         "assets": [],
-        "actions": [idle_a, idle_b],
+        "actions": actions,
         "characters": [a, b],
     }
     if shared:
@@ -154,10 +182,16 @@ def test_multi_character_per_character_assets_accepted():
     assert report.accepted, [d.code for d in report.diagnostics]
 
 
-def test_shared_layered_template_with_rig_contract_accepted():
+def test_shared_layered_template_with_rig_contract_installable():
+    """The shared layered template is bound to a NON-idle semantic, so the
+    pack stays installable with a stable degradation (the per-character
+    sequence idles keep runtime admission open)."""
     pack = _build(_manifest(shared=True))
     report = validate_petpack(pack)
     assert report.accepted, [d.code for d in report.diagnostics]
+    assert report.result == "ACCEPT_WITH_DEGRADATION"
+    assert "renderer_unsupported:action.shared.work" in report.degraded
+    assert any(d.code == "PPK-ACT-W002" for d in report.diagnostics)
 
 
 def test_rig_mismatch_rejected():

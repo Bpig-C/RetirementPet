@@ -13,6 +13,7 @@ import os
 import random
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -21,12 +22,19 @@ from PySide6.QtWidgets import QApplication, QMenu
 
 from retirement_pet import APP_NAME, __version__
 from retirement_pet.action_controller import ActionController
-from retirement_pet.action_registry import ActionRegistry
+from retirement_pet.action_registry import (
+    ActionRegistry,
+    DND_SAFE_SEMANTICS,
+    MEETING_SAFE_SEMANTICS,
+)
 from retirement_pet.activity_monitor import ActivityMonitor, IdleProvider
 from retirement_pet.assets import AssetBundle
 from retirement_pet.audio import AudioManager
 from retirement_pet.clock import Clock, SystemClock
+from retirement_pet.timeline import IdleResetReason, IdleTimeline
 from retirement_pet.clocks import ServiceClock, VisualClock
+from retirement_pet.config_system import UiConfigService
+from retirement_pet.config_system import Source as UiConfigSource
 from retirement_pet.context_adapter import (
     CAT_CLICKED,
     CAT_RANDOM_ACTIONS,
@@ -50,6 +58,7 @@ from retirement_pet.switcher import (
     RuntimeSwitcher,
     first_character_id,
 )
+from retirement_pet.layout_policy import resolve_layout
 from retirement_pet.logging_setup import setup_logging
 from retirement_pet.models import ActionId, LifeStage, OverlaySnapshot, RenderSnapshot
 from retirement_pet.overlay import OverlayController
@@ -69,6 +78,7 @@ from retirement_pet.random_actions import RandomActionScheduler
 from retirement_pet.resource_path import asset_path
 from retirement_pet.rhythm import RhythmController
 from retirement_pet.runtime_state import (
+    ContextId,
     ContextStore,
     EmoteController,
     PerformanceResolver,
@@ -83,6 +93,7 @@ from retirement_pet.single_instance import (
 )
 from retirement_pet.startup import StartupManager, WinRegBackend
 from retirement_pet.state_store import StateStore
+from retirement_pet.text_profile import TextSafetyError, render as render_text
 from retirement_pet.ui.countdown_panel import CountdownPanel
 from retirement_pet.ui.pet_window import PetWindow
 from retirement_pet.ui.renderer import CatRenderer
@@ -97,6 +108,9 @@ from retirement_pet.todo.errors import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: marks a settings key absent from the store (distinct from a stored None)
+_ACTION_SETTING_ABSENT = object()
 
 # A restored selection becomes last-known-good only after it has survived a
 # real, shown-window paint and a quiet observation interval.
@@ -121,7 +135,9 @@ BUNDLED_PREVIEW_PUBLISHER_ID = "community.retirementpet"
 BUNDLED_PREVIEW_PACKAGE_ID = "realistic-retirement-cat"
 BUNDLED_PREVIEW_PACKAGE_VERSION = "0.1.1"
 BUNDLED_PREVIEW_CHARACTER_ID = "realistic-cat"
-BUNDLED_PREVIEW_WARNING_CODES: tuple[str, ...] = ()
+# CR-P01: the historical preview misses spec-6.1 publisher_ref and carries
+# the versioned legacy-exemption warning (PPK-MAN-W002) on every load.
+BUNDLED_PREVIEW_WARNING_CODES: tuple[str, ...] = ("PPK-MAN-W002",)
 
 #: effects that persist while a given action is active
 ACTION_EFFECTS = {
@@ -140,6 +156,13 @@ class _UnavailableTodoService:
     """
 
     __slots__ = ("_reason", "_projection")
+
+    # The facade never rebuilt a store, so its generation never changes;
+    # UI consumers treat it as a stable value (CR-U04).
+    store_generation = 0
+    # No real service exists behind the facade; agents comparing against
+    # this always mismatch and must re-read (V13-01).
+    data_generation = 0
 
     def __init__(self, reason: str):
         self._reason = str(reason)
@@ -182,17 +205,38 @@ class _UnavailableTodoService:
         raise TaskStoreUnavailable(
             self._reason, stage="application")
 
+    def subtree_summary(self, _task_id):
+        # No store was ever opened, so no task can exist in one; the
+        # confirmation preview fails closed like every other task read.
+        from retirement_pet.todo import TodoError
+
+        raise TodoError("task not found")
+
     add_task = _reject_mutation
     rename = _reject_mutation
     set_horizon = _reject_mutation
     set_due_date = _reject_mutation
+    set_importance = _reject_mutation
+    set_urgency = _reject_mutation
+    set_note = _reject_mutation
     complete = _reject_mutation
     restore = _reject_mutation
     add_subtask = _reject_mutation
     move_within_siblings = _reject_mutation
     delete_subtree = _reject_mutation
+    archive_subtree = _reject_mutation
+    restore_archived = _reject_mutation
     start_focus = _reject_mutation
     stop_focus = _reject_mutation
+    create_manual_backup = _reject_mutation
+    restore_from_backup = _reject_mutation
+
+    def list_backups(self) -> list:
+        # no store was opened, so no backup of it can exist
+        return []
+
+    def note_for(self, _task_id) -> str:
+        raise TaskStoreUnavailable(self._reason, stage="application")
 
     def close(self) -> None:
         return None
@@ -235,6 +279,14 @@ class PetApplication:
         self._guard.on_quit_requested = self._quit_from_ipc
         self._guard.on_hide_requested = self._hide_window
         self._guard.on_panel_requested = self._open_control_panel
+        self._guard.on_panel_close_requested = self._close_control_panel
+        # V13-01: the same local server multiplexes the versioned agent
+        # JSON protocol; handlers run on this (application) thread and
+        # call the real services below.
+        from retirement_pet.agent_protocol import AgentProtocolServer
+
+        self.agent_server = AgentProtocolServer(self)
+        self._guard.on_agent_line = self.agent_server.handle_line
         notify_command = QUIET_COMMAND if self.startup_mode else SHOW_COMMAND
         if not self._guard.acquire(command=notify_command):
             logger.info("primary instance already running; exiting")
@@ -252,6 +304,10 @@ class PetApplication:
 
         self.settings = SettingsStore(settings_file(self._data_dir))
         self.settings.load()
+        # V12-06: user-facing UI configuration (layout/visibility, text
+        # templates, action modes) resolved on the frozen resolver priority
+        # and persisted through the same settings file.
+        self.ui_config = UiConfigService(self.settings)
         self._character_onboarding_handled_in_session = False
         # Verification state is reported only through the explicit
         # ``--report-window`` diagnostic hook.  A first report is emitted
@@ -277,6 +333,15 @@ class PetApplication:
         )
 
         self.controller = ActionController(ActionRegistry(), self.clock, self._rng)
+        # CR-C06: one veto at the executor covers every request path
+        # (context resolve, random scheduler, audio, panel, user) - the
+        # per-action "disabled" mode must mean the pet never performs it.
+        self.controller.set_request_gate(self._mode_request_gate)
+        self._character_listeners: list = []
+        # Idle has a first-class timeline: the controller only tracks
+        # explicit actions, and pack idles must keep animating while none
+        # is running (V12-01).
+        self._idle_timeline = IdleTimeline(self.clock)
         self.controller.on_change(self._on_action_changed)
         self.overlay = OverlayController(self.clock, self._rng)
         self.emotes = EmoteController()
@@ -297,6 +362,10 @@ class PetApplication:
         self._todo_init_attempted = False
         self.todo_availability = TaskStoreAvailability.ready()
         self.todo_error: Exception | None = None
+        # Bounded, application-level store for unsaved todo note drafts
+        # (CR-U03): kept drafts outlive the todo page being disposed with
+        # the control panel and are re-offered when the page is rebuilt.
+        self.todo_note_drafts: dict[str, str] = {}
 
         # Construct the programmatic Bootstrap renderer and pet surface before
         # touching any user-writable character storage.  A corrupt/newer
@@ -324,9 +393,25 @@ class PetApplication:
         self.audio.set_sound_enabled(bool(self.settings.get("sound_enabled", True)))
         self.audio.error_message.connect(self._on_audio_error)
         self.audio.playback_changed.connect(self._on_playback_changed)
+        # local playback wins the core.music fact: the bridge un-projects
+        # while our own player is running and re-asserts when it stops
+        self.audio.playback_changed.connect(
+            lambda playing, _track: (
+                self.media_bridge.set_local_playback_active(bool(playing))))
         self._sync_music_tracks()
 
         self.activity = ActivityMonitor(idle_provider)
+        # V13-05: system media bridge (other players via the OS media
+        # session layer).  Independent from AudioManager; default OFF and
+        # fully released while off.  The persisted opt-in is applied only
+        # AFTER construction (V13-05 acceptance F-#1: an early call used
+        # to crash every restart with the setting on).
+        from retirement_pet.media_bridge import SystemMediaBridge, default_provider
+
+        self.media_bridge = SystemMediaBridge(
+            default_provider(), self.settings, self.contexts)
+        if bool(self.settings.get("media_bridge_enabled", False)):
+            self.media_bridge.set_enabled(True)
         self.rhythm = RhythmController(
             self._service_port, self.clock, self.activity,
             self.settings.as_dict(), self.overlay,
@@ -342,6 +427,7 @@ class PetApplication:
             and not self.schedule.is_meeting(),
             min_interval_s=lambda: float(self.settings.get("random_action_min_interval_s", 45)),
             max_interval_s=lambda: float(self.settings.get("random_action_max_interval_s", 120)),
+            mode_allowed=lambda semantic: self._action_mode(semantic) == "auto",
         )
 
         self.startup_manager = StartupManager(WinRegBackend())
@@ -376,6 +462,12 @@ class PetApplication:
         self.window.first_paint.connect(self._on_first_pet_paint)
         self.qt_app.aboutToQuit.connect(self.shutdown)
         self._qt_lifecycle_connected = True
+
+        # V12-06: apply the persisted layout × visibility combination to the
+        # window, overlay bubble gate included; invalid persisted values
+        # fall back to the engine default combination.
+        self._countdown_cache = None
+        self._apply_layout_config()
 
         # Lock screen / sleep / session disconnect suspend the visual clock.
         self._session_watch = SessionWatchFilter(self._on_session_suspended)
@@ -452,10 +544,26 @@ class PetApplication:
     def _on_session_suspended(self, suspended: bool) -> None:
         self._session_suspended = bool(suspended)
         self.visual_clock.set_suspended(self._session_suspended)
+        self._update_idle_timeline_running()
         if self._session_suspended:
             self._pause_active_health_observation()
         else:
             self._resume_active_health_observation()
+
+    def _update_idle_timeline_running(self) -> None:
+        """Idle time advances only while BOTH gate reasons allow it (CR-A04).
+
+        Visibility and session state each pause the timeline independently;
+        clearing one reason must never erase the other's pause, so the
+        running state is always recomputed from the combined condition
+        instead of the individual handlers calling pause/resume directly.
+        """
+        self.media_bridge.set_app_active(
+            self.window.isVisible() and not self._session_suspended)
+        if self.window.isVisible() and not self._session_suspended:
+            self._idle_timeline.resume()  # continue, never replay hidden time
+        else:
+            self._idle_timeline.pause()
 
     def _complete_active_health_observation(self) -> None:
         """Promote only the exact restored tuple that began observation."""
@@ -478,6 +586,23 @@ class PetApplication:
     def _write_window_report(self) -> None:
         if self._report_window_path is None:
             return
+        # R08-03: an incrementing sequence makes every observation
+        # uniquely identifiable, so a harness can tell a fresh sample
+        # from a stale file left behind by an earlier run
+        self._report_window_sequence = (
+            getattr(self, "_report_window_sequence", 0) + 1)
+        if getattr(self, "_report_window_timer", None) is None:
+            from PySide6.QtCore import QTimer
+
+            timer = QTimer(self.window)
+            timer.setInterval(400)
+            timer.timeout.connect(self._write_window_report)
+            self._report_window_timer = timer
+        if not self._report_window_timer.isActive()                 and not self._shutdown_complete:
+            # diagnostics-only: keep the observation file live so
+            # harnesses can sample the real layout anchor over time
+            timer = self._report_window_timer
+            timer.start()
         temporary_path = self._report_window_path.with_name(
             f".{self._report_window_path.name}.{os.getpid()}.tmp")
         try:
@@ -492,7 +617,19 @@ class PetApplication:
                 "schema": 2,
                 "pid": os.getpid(),
                 # Preserve the v1 top-level field for existing harnesses.
+                "pid": os.getpid(),
                 "hwnd": int(self.window.winId()),
+                "sequence": self._report_window_sequence,
+                "generated_at": datetime.now(timezone.utc).isoformat(
+                    timespec="milliseconds"),
+                # R08-03: the REAL layout foot anchor, not the window
+                # bottom edge - local DIP for context, SCREEN pixels as
+                # the comparison basis
+                "foot_point": self.window.current_foot_point(),
+                "foot_point_screen": self.window.current_foot_point_global(),
+                "window_dpi": self.window.current_window_dpi(),
+                "window_frame": [self.window.x(), self.window.y(),
+                                 self.window.width(), self.window.height()],
                 "onboarding": {
                     "campaign": CHARACTER_ONBOARDING_CAMPAIGN,
                     "ready": self._character_onboarding_report_ready,
@@ -691,6 +828,9 @@ class PetApplication:
         self._shutdown_complete = True
         logger.info("shutting down")
         steps = (
+            ("shutdown report timer failed",
+             lambda: (getattr(self, "_report_window_timer", None)
+                      and self._report_window_timer.stop())),
             ("shutdown health timer failed",
              lambda: self._health_observation_timer.stop()),
             ("shutdown startup timer failed",
@@ -705,6 +845,7 @@ class PetApplication:
             ("shutdown audio failed", self.audio.stop),
             ("shutdown tray failed", self.tray.hide),
             ("shutdown control panel failed", self._close_control_panel),
+            ("shutdown media bridge failed", self.media_bridge.shutdown),
             ("shutdown todo failed",
              lambda: self._todo_service.close()
              if self._todo_service is not None else None),
@@ -750,11 +891,14 @@ class PetApplication:
             self.window.activateWindow()
         self.visual_clock.set_fps(int(self.settings.get("animation_fps", 16)))
         self.visual_clock.set_visible(True)
+        self._update_idle_timeline_running()
         self._resume_active_health_observation()
 
     def _hide_window(self) -> None:
         self._pause_active_health_observation()
         self.window.hide()
+        # visibility already off: the combiner now pauses the timeline
+        self._update_idle_timeline_running()
         self.visual_clock.set_visible(False)  # hidden = zero visual ticks
 
     def _toggle_window(self) -> None:
@@ -882,6 +1026,9 @@ class PetApplication:
 
     def _refresh_countdown(self) -> None:
         self._countdown_cache = self.countdown_module.refresh()
+        # The heading renders {days}/{stage_name} live, so it must follow
+        # the 1 Hz countdown snapshot, not only config changes.
+        self._sync_countdown_heading()
 
     # -- snapshot composition -----------------------------------------------------
 
@@ -911,7 +1058,11 @@ class PetApplication:
         return RenderSnapshot(
             action=action,
             stage=stage,
-            elapsed_ms=runtime.elapsed_ms(now_ms) if runtime else 0,
+            # Explicit actions keep their ActionRuntime clock; idle runs on
+            # its own monotonic timeline so pack idles keep animating
+            # (V12-01) instead of freezing on the first frame.
+            elapsed_ms=(runtime.elapsed_ms(now_ms) if runtime
+                        else self._idle_timeline.elapsed_ms(now_ms)),
             frame=runtime.frame(now_ms) if runtime else 0,
             time_ms=now_ms,
             overlay=overlay_final,
@@ -978,6 +1129,15 @@ class PetApplication:
         self.switcher = switcher
         self.catalog = catalog
         self._character_storage_degraded = bool(library.degraded)
+        if not library.degraded:
+            # L07-01: resume scheduled deletions only now - the selection
+            # facts are readable, so a revision that became active or the
+            # restore basis is protected, not deleted.
+            try:
+                library.recover_pending_deletes(
+                    self._protected_selection_guard())
+            except Exception:  # noqa: BLE001 - keep startup alive
+                logger.exception("pending delete recovery failed")
 
     def _restore_active_character(self) -> None:
         """Restore exact ACTIVE without rewriting it, then try LKG.
@@ -1327,7 +1487,8 @@ class PetApplication:
                                         entry.character_id)
         candidate = self.switcher.prepare(request)
         if candidate is None:
-            self.overlay.show_bubble("角色无法加载，已保持当前角色", 3500)
+            self.overlay.show_bubble("角色无法加载，已保持当前角色", 3500,
+                                   importance="error")
             return False
         previous_runtime = self.switcher.current_runtime
         previous_safe_mode = self.switcher.in_safe_mode
@@ -1343,11 +1504,54 @@ class PetApplication:
                 "目标角色未启用；已恢复安全可确认的显示状态", 3500)
             return False
         self._sync_capabilities()
+        if entry.revision_key in set(self.library.pending_delete_keys()):
+            # L07-01 state closure: explicitly selecting a pending-delete
+            # revision withdraws the scheduled deletion - an activation
+            # must never silently await its own removal.
+            self.library.cancel_pending_delete(
+                entry.revision_key, reason="reselected_by_user")
         self.overlay.show_bubble(f"已切换到 {entry.display_name}", 2500)
+        # Per-character text overrides and the {character_name} variable
+        # follow the ACTIVE character; the layout combo itself is global
+        # and intentionally survives the switch.
+        self._apply_layout_config()
         return True
+
+    def on_character_changed(self, callback):
+        """Subscribe to ACTIVE-character changes; returns an unsubscribe."""
+        self._character_listeners.append(callback)
+
+        def _unsubscribe() -> None:
+            try:
+                self._character_listeners.remove(callback)
+            except ValueError:
+                pass
+
+        return _unsubscribe
+
+    def _notify_character_changed(self) -> None:
+        for callback in list(self._character_listeners):
+            try:
+                callback()
+            except Exception:  # noqa: BLE001 - listeners must not break swaps
+                logger.exception("character change listener failed")
+
+    def _protected_selection_guard(self):
+        """Guard over the FRESH active and last-known-good revisions."""
+        def guard(rk) -> bool:
+            protected = set()
+            for slot in ("active", "last_known_good"):
+                selection = self._selection_store.get(slot)
+                if selection is not None:
+                    protected.add(selection.revision_key())
+            return rk in protected
+        return guard
 
     def _sync_capabilities(self) -> None:
         """Publish ACTIVE capabilities and immediately resolve current facts."""
+        # The visible body changed (switch commit, safe mode or fallback):
+        # the new character's idle loop starts fresh (V12-01).
+        self._idle_timeline.reset(IdleResetReason.CHARACTER_SWITCH)
         runtime = self.switcher.current_runtime
         if runtime is not None and hasattr(runtime, "capabilities"):
             capabilities = runtime.capabilities()
@@ -1356,8 +1560,46 @@ class PetApplication:
         self.capabilities = capabilities
         self.bridge.set_capabilities(
             capabilities, reason="character_capabilities_changed")
+        self._notify_character_changed()
 
     # -- interactions ------------------------------------------------------------
+
+    def request_manual_action(self, semantic: str) -> tuple[bool, str]:
+        """Public formal trigger used by the characters/actions UI and the
+        local agent protocol (V13-02): every engine gate in order, and the
+        message explains acceptance or the real rejection reason."""
+        return self._request_manual_action(semantic)
+
+    def standby_now(self) -> None:
+        """Public entry for the agent protocol's action.stop (V13-02):
+        same semantics as the UI 待机 button."""
+        self._user_standby()
+
+    def activity_status(self) -> dict:
+        """Explainable activity facts (V13-06) for the UI and agents.
+
+        ``state`` is the aggregate input fact (active/idle/unknown) from
+        system idle time only - never key content, window titles or app
+        usage history.  ``focused`` reflects the single focus task
+        WITHOUT its title anywhere in this payload.
+        """
+        focusing = bool(self.todo_bridge.projection.focusing)
+        state = self.rhythm.activity_state()
+        return {
+            "state": state,
+            "link_enabled": self.rhythm.link_enabled(),
+            "focused": focusing,
+            "working_on_focused_task": focusing and state == "active",
+        }
+
+    def action_mode(self, semantic: str) -> str:
+        """Public read of the per-action mode (auto|manual|disabled)."""
+        return self._action_mode(semantic)
+
+    def switch_character_entry(self, entry) -> bool:
+        """Public formal switch (REQUEST→PREPARE→SWAP→COMMIT) shared by the
+        characters page and the local agent protocol (V13-02)."""
+        return self._switch_character(entry)
 
     def _user_standby(self) -> None:
         """User picks 待机: end the performance and clear USER-owned facts.
@@ -1379,6 +1621,13 @@ class PetApplication:
         now_ms = monotonic_ns() // 1_000_000
         if self.emotes.request(CAT_CLICKED, now_ms, 2500):
             self.controller.request(ActionId.INTERACT, "user", force=True)
+        if self.ui_config.source_of(
+                "greeting_text", self._active_character_fqid()) \
+                is not UiConfigSource.ENGINE_DEFAULT:
+            greeting = self._render_text_template("greeting_text")
+            if greeting is not None:
+                self.overlay.show_bubble(greeting, 2500)
+                return
         messages = ("喵？", "在呢～", "摸摸头", "还有很长的陪伴呢")
         if self._rng.random() < 0.4:
             self.overlay.show_bubble(self._rng.choice(messages), 2500)
@@ -1425,6 +1674,10 @@ class PetApplication:
             event.current.spec.action_id.value if event.current else "idle",
             event.reason,
         )
+        if event.current is None:
+            # Entering idle (action ended naturally or was invalidated):
+            # the idle loop restarts from its first frame.
+            self._idle_timeline.reset(IdleResetReason.ACTION_END)
 
     # -- startup health -------------------------------------------------------------
 
@@ -1638,13 +1891,15 @@ class PetApplication:
             self.settings.set("startup_enabled", enabled)
             self.settings.save()
         else:
-            self.overlay.show_bubble("无法修改开机自启（注册表不可用）", 4000)
+            self.overlay.show_bubble("无法修改开机自启（注册表不可用）", 4000,
+                                   importance="error")
 
     def _repair_autostart(self) -> None:
         if self.startup_manager.repair():
             self.overlay.show_bubble("开机自启已修复", 3000)
         else:
-            self.overlay.show_bubble("修复失败，请检查权限", 3000)
+            self.overlay.show_bubble("修复失败，请检查权限", 3000,
+                                   importance="error")
 
     def _add_music_files(self) -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -1666,7 +1921,8 @@ class PetApplication:
             self.settings.save()
             self.overlay.show_bubble(f"已添加 {added} 首歌", 2500)
         else:
-            self.overlay.show_bubble("没有可用的音乐文件", 3000)
+            self.overlay.show_bubble("没有可用的音乐文件", 3000,
+                                   importance="error")
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.settings.as_dict(), self._apply_settings, self.window)
@@ -1678,10 +1934,15 @@ class PetApplication:
         self.settings.update(values)
         if not self.settings.save():
             # Persistence is the commit point.  Keep runtime and in-memory
-            # state aligned with the last durable settings on failure.
-            self.settings.update({
-                key: before.get(key) for key in values if key in before
-            })
+            # state aligned with the last durable settings on failure; a
+            # key that did not exist before must not linger in memory
+            # (CR-C04 discipline applies to every apply payload key).
+            rollback = {key: before[key] for key in values
+                        if key in before}
+            self.settings.update(rollback)
+            for key in values:
+                if key not in before:
+                    self.settings.discard(key)
             logger.warning("settings update was not persisted")
             return False
         # Apply immediately-visible effects.
@@ -1693,5 +1954,241 @@ class PetApplication:
         self._sync_music_tracks()
         if self.settings.get("music_paths", []) != music_paths_before:
             self.overlay.show_bubble("音乐列表已更新", 2500)
+        if "media_bridge_enabled" in values:
+            # V13-05: the explicit user opt-in starts/stops the whole
+            # bridge (subscriptions released when off)
+            wanted = bool(values["media_bridge_enabled"])
+            if wanted != self.media_bridge.is_enabled():
+                if self.media_bridge.set_enabled(wanted):
+                    if wanted:
+                        self.overlay.show_bubble("已开启系统媒体联动", 2500)
+                else:
+                    self.overlay.show_bubble(
+                        "系统媒体联动不可用：未检测到系统媒体会话服务", 3500)
         logger.info("settings updated: %s", sorted(values.keys()))
         return True
+
+    # -- V12-06: layout/visibility, text templates, manual actions ----------
+
+    def _active_character_fqid(self) -> str | None:
+        active = self._selection_store.get("active")
+        return active.character_fqid if active is not None else None
+
+    def _apply_layout_config(self) -> None:
+        """Resolve the persisted layout × policy and apply it to the pet.
+
+        Persisted values were combination-validated at save time; a value
+        written by an older version or by hand still falls back to the
+        engine default instead of crashing here.
+        """
+        try:
+            view_model = resolve_layout(
+                str(self.ui_config.effective("layout_id")),
+                str(self.ui_config.effective("visibility_policy")),
+            )
+        except ValueError:
+            logger.warning("invalid persisted layout combination; "
+                           "using standard+normal")
+            view_model = resolve_layout("standard", "normal")
+        self.overlay.set_bubble_policy(view_model["bubbles"])
+        self.window.apply_layout_view_model(view_model)
+        self._sync_countdown_heading()
+
+    def _text_template_variables(self) -> dict[str, str]:
+        snap = self._countdown_cache
+        fqid = self._active_character_fqid()
+        character_name = "退休猫"
+        series_name = "退休猫"
+        if fqid is not None:
+            # display names come from the catalog entry (manifest), never
+            # from the fqid suffix
+            active = self._selection_store.get("active")
+            character_id = fqid.rsplit(".", 1)[-1]
+            for entry in self.catalog.entries():
+                if entry.character_id == character_id and (
+                        active is None
+                        or entry.revision_key == active.revision_key()):
+                    character_name = entry.display_name
+                    series_name = entry.series_id
+                    break
+        return {
+            "character_name": character_name,
+            "series_name": series_name,
+            "stage_name": snap.stage_text if snap is not None else "",
+            "days": str(snap.days) if snap is not None else "",
+            "hours": str(snap.hours) if snap is not None else "",
+            "minutes": str(snap.minutes) if snap is not None else "",
+        }
+
+    def _render_text_template(self, key: str) -> str | None:
+        """Render a user template key for the active character; None means
+        the built-in default text should be used.
+
+        effective() itself validates what it resolves (CR-C01), so the
+        whole chain stays inside the guard: no persisted value may ever
+        escape as an exception from a Qt callback."""
+        try:
+            template = str(self.ui_config.effective(
+                key, self._active_character_fqid()))
+            return render_text(
+                template, self._text_template_variables())
+        except TextSafetyError:
+            logger.warning("text template for %s failed safety checks", key)
+            return None
+
+    def _sync_countdown_heading(self) -> None:
+        self.window.set_countdown_heading(
+            self._render_text_template("countdown_text"))
+
+    def _mode_request_gate(self, action_id: ActionId, source: str,
+                           force: bool) -> bool:
+        """Reject requests for semantics the user set to disabled.
+
+        Safety discipline is untouched: this can only ever REMOVE an
+        action from consideration, never admit one that discipline or
+        cooldowns would have blocked.
+        """
+        if self._action_mode(action_id.value) != "disabled":
+            return True
+        logger.info(
+            "action request for %s from %s vetoed: semantic disabled",
+            action_id.value, source)
+        return False
+
+    def _action_mode(self, semantic: str) -> str:
+        modes = self.settings.get("ui_action_modes", {})
+        value = modes.get(semantic, "auto") if isinstance(modes, dict) \
+            else "auto"
+        return value if value in ("auto", "manual", "disabled") else "auto"
+
+    def _set_action_setting(self, settings_key: str, semantic: str,
+                            value) -> bool:
+        """Persist one per-action override with exact-presence rollback
+        (CR-C04): a settings key that did not exist before a failed save
+        must not linger in memory, where it would take effect immediately
+        and reach disk through the next unrelated successful save."""
+        raw = self.settings.get(settings_key, None)
+        existed = self.settings.get(settings_key, _ACTION_SETTING_ABSENT) \
+            is not _ACTION_SETTING_ABSENT
+        mapping = dict(raw) if isinstance(raw, dict) else {}
+        mapping[semantic] = value
+        self.settings.set(settings_key, mapping)
+        if self.settings.save():
+            return True
+        if existed and isinstance(raw, dict):
+            self.settings.set(settings_key, raw)
+        else:
+            self.settings.discard(settings_key)
+        return False
+
+    def _set_action_mode(self, semantic: str, mode: str) -> bool:
+        if mode not in ("auto", "manual", "disabled"):
+            return False
+        if not self._set_action_setting("ui_action_modes", semantic, mode):
+            return False
+        if mode == "disabled":
+            # an unbounded runtime started before the switch would
+            # otherwise keep playing (loop actions have no duration end)
+            self.controller.end_if_action(
+                ActionId(semantic), "mode:disabled")
+        return True
+
+    def _action_single_pass(self, semantic: str) -> tuple[int, int] | None:
+        """Frame count and one-pass duration of the ACTIVE character's
+        material, or None when it has no sequence pass.
+
+        C06-R2: control availability and playback timing come from the
+        current PetPack's declared per-frame durations - never from the
+        built-in bundle's frame count over an assumed fps.
+        """
+        runtime = self.switcher.current_runtime
+        if runtime is not None and hasattr(runtime, "semantic_sequence_ms"):
+            durations = runtime.semantic_sequence_ms(f"core.{semantic}")
+            if durations:
+                return len(durations), sum(durations)
+            return None
+        # built-in cat: a sequence visual (if any) is timed by spec fps,
+        # the one declared timing authority for that material
+        try:
+            spec = self.controller.spec_of(ActionId(semantic))
+        except ValueError:
+            return None
+        visual = self.bundle.action_visual(semantic)
+        frames = getattr(visual, "frames", None)
+        if frames and spec.animation_fps > 0:
+            return len(frames), max(1, len(frames) * 1000
+                                    // spec.animation_fps)
+        return None
+
+    def _action_loop(self, semantic: str) -> bool:
+        loops = self.settings.get("ui_action_loops", {})
+        value = loops.get(semantic, True) if isinstance(loops, dict) else True
+        return bool(value)
+
+    def _set_action_loop(self, semantic: str, loop: bool) -> bool:
+        return self._set_action_setting("ui_action_loops", semantic,
+                                        bool(loop))
+
+    def _request_manual_action(self, semantic: str) -> tuple[bool, str]:
+        """User-triggered action through every engine gate, in order.
+
+        Capability -> per-action mode -> meeting discipline -> dnd
+        discipline -> cooldown.  The force request bypasses priority, so
+        the discipline gates MUST run before it.
+        """
+        semantic = str(semantic).strip()
+        try:
+            action_id = ActionId(semantic)
+        except ValueError:
+            return False, "未知动作"
+        character_actions = {a.rsplit(".", 1)[-1]
+                             for a in self.capabilities.character_actions}
+        core_key = "core.idle" if semantic == "idle" \
+            else f"core.{semantic}"
+        supported = (
+            self.capabilities.supports(semantic)
+            or self.capabilities.supports(core_key)
+            or semantic in character_actions
+            or self.controller.has_action(action_id)
+        )
+        if not supported:
+            return False, "当前角色缺少该动作素材，已回退待机"
+        mode = self._action_mode(semantic)
+        if mode == "disabled":
+            return False, "该动作已禁用，先在动作页改回自动或仅手动"
+        active_contexts = {c for c in self.contexts.active()}
+        if ContextId.MEETING in active_contexts \
+                and semantic not in MEETING_SAFE_SEMANTICS:
+            return False, "会议中已禁止该动作"
+        if ContextId.MEETING in active_contexts \
+                and semantic == "music" and self.audio.sound_enabled:
+            return False, "会议中仅静音音乐可用，请先静音"
+        if ContextId.DO_NOT_DISTURB in active_contexts \
+                and semantic not in DND_SAFE_SEMANTICS:
+            return False, "勿扰中仅休息或音乐可用"
+        current = self.controller.current
+        if current is not None and current.spec.action_id == action_id:
+            return False, "该动作正在表演中"
+        remaining = self.controller.cooldown_remaining_ms(action_id)
+        if remaining > 0:
+            return False, f"冷却中，还剩约 {remaining // 1000 + 1} 秒"
+        payload: dict | None = None
+        spec = self.controller.spec_of(action_id)
+        if spec.max_duration_ms is None:
+            payload = {"loop": self._action_loop(semantic)}
+            if not payload["loop"]:
+                # single pass = the ACTIVE material's full declared cycle
+                # once; without sequence material this stays the honest
+                # minimum-duration fallback (and the switch is disabled)
+                material = self._action_single_pass(semantic)
+                if material is not None:
+                    payload["single_pass_ms"] = material[1]
+        accepted = self.controller.request(
+            action_id, "panel", force=True, payload=payload)
+        if accepted:
+            if payload and payload.get("single_pass_ms"):
+                return True, (
+                    f"已触发：{semantic}（单次播放素材一遍，"
+                    f"{payload['single_pass_ms'] / 1000:.1f} 秒）")
+            return True, f"已触发：{semantic}"
+        return False, "当前表演优先级更高，稍后再试"

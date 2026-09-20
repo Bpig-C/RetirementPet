@@ -32,10 +32,10 @@ def test_release_version_is_consistent_across_runtime_and_packaging():
         (root / "pyproject.toml").read_text(encoding="utf-8"))
     version_resource = (root / "scripts/version_info.txt").read_text(
         encoding="utf-8")
-    assert __version__ == "1.1.1"
+    assert __version__ == "1.3.0"
     assert project["project"]["version"] == __version__
-    assert 'StringStruct("FileVersion", "1.1.1.0")' in version_resource
-    assert 'StringStruct("ProductVersion", "1.1.1.0")' in version_resource
+    assert 'StringStruct("FileVersion", "1.3.0.0")' in version_resource
+    assert 'StringStruct("ProductVersion", "1.3.0.0")' in version_resource
 
 
 def test_character_author_sources_are_release_inputs_with_byte_stable_license():
@@ -52,7 +52,7 @@ def _valid_build_info() -> dict:
         "schema": 1,
         "artifact": "RetirementPet",
         "artifact_kind": "onedir",
-        "version": "1.1.1",
+        "version": "1.3.0",
         "commit": "a" * 40,
         "git_tree": "b" * 40,
         "source_clean": True,

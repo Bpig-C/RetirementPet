@@ -21,6 +21,15 @@ from typing import Any, Callable
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parent.parent
+# -I (documented isolation flags) drops the script directory from
+# sys.path, so the direct-script import needs the path restored first
+sys.path.insert(0, str(ROOT / "scripts"))
+try:
+    from scripts import verify_displays as display_harness
+    from scripts import verify_windows as verify_windows
+except ImportError:  # direct script execution: scripts/ is sys.path[0]
+    import verify_displays as display_harness  # type: ignore
+    import verify_windows as verify_windows  # type: ignore
 VENV_PY = ROOT / ".venv" / "Scripts" / "python.exe"
 DEFAULT_EVIDENCE = ROOT / ".release" / "acceptance"
 TOOLCHAIN_ATTESTATION = ROOT / ".release" / "toolchain-attestation.json"
@@ -50,6 +59,9 @@ _ACCEPTANCE_GATE_ORDER = (
     "window_harness_exe",
     "static_before_smoke_exe",
     "smoke_exe",
+    "displays_exe_harness",
+    "displays_single_screen_exe",
+    "displays_multi_screen_exe",
     "static_before_performance_alpha",
     "performance_alpha_health",
     "static_before_stability_alpha",
@@ -264,7 +276,14 @@ def _health_report_outcome(
             or harness.get("postcheck_unchanged") is not True):
         return INVALID, "health report contract is incomplete"
     result = report.get("result")
+    # cross-check the failures list against the claimed result: an
+    # adversarial report claiming PASS while its own failures list is
+    # non-empty must never pass (V12-08 audit)
+    failures_list = report.get("failures")
     if exit_code == 0 and result == PASS:
+        if isinstance(failures_list, list) and failures_list:
+            return INVALID, ("health report claims PASS but its failures "
+                             "list is non-empty")
         return PASS, (
             f"receipt-bound {evidence_class} observation passed; "
             "not a Production gate")
@@ -464,6 +483,136 @@ class GateRun:
         return outcome
 
 
+def _displays_outcomes(report: dict[str, Any],
+                       receipt: dict[str, Any]) -> tuple[str, str, str]:
+    """Fail-closed consumption of a schema-2 display report.
+
+    Old schemas, missing fields, malformed scenarios, verdicts that do
+    not follow the aggregation rules, or an observation of a different
+    candidate are INVALID - never a PASS.  Single-screen baseline and
+    multi-screen certification are evaluated separately; a SKIP stays a
+    SKIP and is never rounded up.
+    """
+    errors = display_harness.validate_display_report(report)
+    if errors:
+        return (INVALID, INVALID,
+                "display report contract invalid: " + "; ".join(errors[:5]))
+    candidate = report["candidate"]
+    if candidate.get("kind") != "exe":
+        return (INVALID, INVALID,
+                "display report did not observe the EXE candidate")
+    observed_sha = str(candidate.get("exe_sha256") or "")
+    if observed_sha.lower() != str(receipt["exe_sha256"]).lower():
+        return (INVALID, INVALID,
+                "display report observed a different candidate")
+    single = report["single_screen_baseline"]["result"]
+    multi = report["multi_screen_certification"]["result"]
+    return single, multi, ""
+
+
+def dist_manifest_outcome(manifest: dict[str, Any],
+                          observed_receipt: dict[str, Any],
+                          supplied_receipt: dict[str, Any],
+                          source: dict[str, str],
+                          exit_code: int) -> tuple[str, str]:
+    """Fail-closed consumption of the dist validation manifest."""
+    if manifest.get("schema") != 2:
+        return INVALID, "dist manifest schema is missing or not current"
+    comparison = manifest.get("source_comparison")
+    if comparison != {
+            "commit": source["commit"],
+            "git_tree": source["git_tree"],
+            "worktree_clean": True}:
+        return INVALID, "source identity changed during acceptance"
+    if exit_code == 0 and manifest.get("result") == PASS:
+        required = ("schema", "result", "recipe_id", "artifact_id",
+                    "exe_sha256", "commit", "git_tree", "file_count",
+                    "total_bytes", "attestation_protocol")
+        if any(key not in observed_receipt for key in required):
+            return INVALID, "dist receipt is missing required fields"
+        if _receipt_binding(observed_receipt) != _receipt_binding(
+                supplied_receipt):
+            return FAIL, "dist receipt differs from supplied release receipt"
+        return PASS, "artifact inventory exactly matches supplied receipt"
+    return INVALID, (
+        f"inconsistent dist result (exit {exit_code}, "
+        f"result {manifest.get('result')!r})")
+
+
+def result_postcheck_with_binding(
+        root: Path, filename: str, *, expected_target: str = "source",
+        expected_build_id: str | None = None,
+        expected_exe_sha256: str | None = None)         -> Callable[[int], tuple[str, str]]:
+    """Structured-result postcheck that RE-DERIVES the verdict (audit):
+    the report must be this harness for the EXPECTED target, carry the
+    complete contract check set with strictly-True booleans, and — for
+    EXE runs — bind the exact expected candidate.  A failed check or a
+    missing one can never yield PASS (V12-08 OVR-01)."""
+    required = verify_windows.REQUIRED_CHECKS.get(expected_target)
+    if not required:
+        return _const_postcheck(INVALID,
+                                f"unknown expected target {expected_target!r}")
+
+    def compare(exit_code: int) -> tuple[str, str]:
+        paths = list(root.rglob(filename))
+        if len(paths) != 1:
+            return INVALID, f"did not produce exactly one {filename}"
+        report = _load_json(paths[0], filename)
+        if report.get("harness") != "scripts/verify_windows.py":
+            return INVALID, (
+                "window report harness binding is missing or foreign")
+        if report.get("target") != expected_target:
+            return INVALID, (
+                f"window report target {report.get('target')!r} does not "
+                f"match the expected target {expected_target!r}")
+        checks = report.get("checks")
+        if not isinstance(checks, list) or not checks:
+            return INVALID, "window report checks are missing"
+        by_name: dict[str, object] = {}
+        for entry in checks:
+            if not isinstance(entry, dict) or not isinstance(
+                    entry.get("name"), str):
+                return INVALID, "window report checks are malformed"
+            if entry["name"] in by_name:
+                return INVALID, (f"duplicate check {entry['name']!r} in "
+                                 "window report")
+            by_name[entry["name"]] = entry.get("pass")
+        missing = [name for name in required if name not in by_name]
+        if missing:
+            return INVALID, ("window report is missing required checks: "
+                             + ", ".join(missing))
+        failed = sorted(
+            name for name, val in by_name.items() if val is not True)
+        if failed:
+            return FAIL, ("required checks not strictly True: "
+                          + ", ".join(failed))
+        if expected_target == "exe":
+            artifact = report.get("artifact")
+            if (not isinstance(artifact, dict)
+                    or artifact.get("build_id") != expected_build_id
+                    or report.get("exe_sha256") != expected_exe_sha256
+                    or report.get("attestation_protocol") != 2):
+                return INVALID, (
+                    "window report does not bind the expected EXE "
+                    "candidate")
+        result = report.get("result")
+        if exit_code == 0 and result == PASS:
+            return PASS, ("structured result is PASS; all required "
+                          "checks strictly True")
+        if exit_code == 1 and result == FAIL:
+            return FAIL, "structured result is FAIL"
+        return INVALID, (
+            f"inconsistent structured result (exit {exit_code}, "
+            f"result {result!r})")
+    return compare
+
+
+def _const_postcheck(outcome: str, detail: str)         -> Callable[[int], tuple[str, str]]:
+    def compare(_exit_code: int) -> tuple[str, str]:
+        return outcome, detail
+    return compare
+
+
 def _production_pending() -> list[dict[str, str]]:
     return [
         {"gate": "multi_screen_dpi",
@@ -553,9 +702,20 @@ def _run_acceptance_impl(
                     name, SKIP,
                     "gate was not reached because acceptance stopped earlier")
         invalid_run = bool(gate.invalid_reasons)
+        # D08-06: profile-aware required/optional distinction.  The
+        # multi-screen certification is an optional Alpha item - its SKIP
+        # (environment genuinely absent, stated with the precise reason)
+        # does not block Alpha, but a FAIL or INVALID NEVER passes, and
+        # Production still requires it as a full PASS.
+        optional_alpha = {"displays_multi_screen_exe"}
+        blocking = [check for check in gate.checks
+                    if not (check.get("outcome") == SKIP
+                            and str(check.get("name"))
+                            in optional_alpha
+                            and args.profile == "alpha")]
         alpha_pass = (
-            not invalid_run and bool(gate.checks)
-            and all(check.get("outcome") == PASS for check in gate.checks))
+            not invalid_run and bool(blocking)
+            and all(check.get("outcome") == PASS for check in blocking))
         pending = _production_pending()
         alpha_verdict, production_verdict, requested_go = _verdicts(
             alpha_pass, args.profile)
@@ -754,8 +914,14 @@ def _run_acceptance_impl(
             observed_receipt = _load_json(
                 receipt_paths[0], "dist validation receipt")
             result = observed_manifest.get("result")
+            # V12-08 audit: the source identity comparison is REQUIRED -
+            # an old-format manifest that omits it can never pass, and
+            # the manifest schema must be current (shared outcome logic)
+            if observed_manifest.get("schema") != 2:
+                return INVALID, (
+                    "dist manifest schema is missing or not current")
             comparison = observed_manifest.get("source_comparison")
-            if isinstance(comparison, dict) and comparison != {
+            if comparison != {
                     "commit": source["commit"],
                     "git_tree": source["git_tree"],
                     "worktree_clean": True}:
@@ -800,21 +966,14 @@ def _run_acceptance_impl(
                 f"result {result!r})")
         return compare
 
-    def result_postcheck(root: Path, filename: str) \
-            -> Callable[[int], tuple[str, str]]:
-        def compare(exit_code: int) -> tuple[str, str]:
-            paths = list(root.rglob(filename))
-            if len(paths) != 1:
-                return INVALID, f"did not produce exactly one {filename}"
-            result = _load_json(paths[0], filename).get("result")
-            if exit_code == 0 and result == PASS:
-                return PASS, "structured result is PASS"
-            if exit_code == 1 and result == FAIL:
-                return FAIL, "structured result is FAIL"
-            return INVALID, (
-                f"inconsistent structured result (exit {exit_code}, "
-                f"result {result!r})")
-        return compare
+    def result_postcheck(root: Path, filename: str, *,
+                         expected_target: str = "source")             -> Callable[[int], tuple[str, str]]:
+        return result_postcheck_with_binding(
+            root, filename, expected_target=expected_target,
+            expected_build_id=expected_id if expected_target == "exe"
+            else None,
+            expected_exe_sha256=expected_exe if expected_target == "exe"
+            else None)
 
     def smoke_postcheck(root: Path) \
             -> Callable[[int], tuple[str, str]]:
@@ -947,7 +1106,9 @@ def _run_acceptance_impl(
         python + [str(ROOT / "scripts" / "verify_windows.py"),
                   "--target", "source", "--evidence-root",
                   str(run_dir / "window-source")],
-        postcheck=result_postcheck(run_dir / "window-source", "report.json"),
+        postcheck=result_postcheck(run_dir / "window-source",
+                                   "report.json",
+                                   expected_target="source"),
     )
     if window_source_outcome != PASS:
         skip_remaining(
@@ -979,7 +1140,8 @@ def _run_acceptance_impl(
                   "--expected-build-id", expected_id,
                   "--expected-exe-sha256", expected_exe,
                   "--evidence-root", str(run_dir / "window-exe")],
-        postcheck=result_postcheck(run_dir / "window-exe", "report.json"),
+        postcheck=result_postcheck(run_dir / "window-exe", "report.json",
+                                   expected_target="exe"),
     )
     if window_exe_outcome != PASS:
         skip_remaining(
@@ -1022,12 +1184,96 @@ def _run_acceptance_impl(
         skip_remaining(
             "EXE smoke did not pass; no further candidate process was "
             "started",
+            ("displays_exe_harness", "displays_single_screen_exe",
+             "displays_multi_screen_exe",
+             "static_before_performance_alpha", "performance_alpha_health",
+             "static_before_stability_alpha", "stability_alpha",
+             "dist_manifest_final", "final_source_clean",
+             "final_toolchain_lock"),
+        )
+        return finish()
+    displays_dir = run_dir / "displays-exe"
+
+    def displays_postcheck(exit_code: int) -> tuple[str, str]:
+        paths = list(displays_dir.rglob("report.json"))
+        if len(paths) != 1:
+            return INVALID, "did not produce exactly one report.json"
+        report = _load_json(paths[0], "display verification report")
+        errors = display_harness.validate_display_report(report)
+        if errors:
+            return INVALID, ("display report contract invalid: "
+                             + "; ".join(errors[:5]))
+        results = [entry["result"]
+                   for entry in report["scenarios"].values()]
+        if exit_code == 0 and FAIL not in results and INVALID not in results:
+            return PASS, "display scenarios produced no FAIL/INVALID"
+        if exit_code == 1 and (FAIL in results or INVALID in results):
+            return FAIL, "display scenarios reported a failure"
+        return INVALID, f"inconsistent display result (exit {exit_code})"
+
+    displays_outcome = gate.command(
+        "displays_exe_harness",
+        python + [str(ROOT / "scripts" / "verify_displays.py"),
+                  "--exe", "--artifact-dir", str(artifact),
+                  "--expected-build-id", expected_id,
+                  "--expected-exe-sha256", expected_exe,
+                  "--evidence-root", str(displays_dir),
+                  "--observe-seconds", "6"],
+        timeout=300,
+        postcheck=displays_postcheck,
+    )
+    if displays_outcome != PASS:
+        skip_remaining(
+            "display verification did not produce a trustworthy report",
+            ("displays_single_screen_exe", "displays_multi_screen_exe",
+             "static_before_performance_alpha", "performance_alpha_health",
+             "static_before_stability_alpha", "stability_alpha",
+             "dist_manifest_final", "final_source_clean",
+             "final_toolchain_lock"),
+        )
+        return finish()
+    report_paths = list(displays_dir.rglob("report.json"))
+    report_rel = (report_paths[0].relative_to(run_dir).as_posix()
+                  if len(report_paths) == 1
+                  else "displays-exe/report.json (missing)")
+    if len(report_paths) != 1:
+        gate.record("displays_single_screen_exe", INVALID,
+                    "display report is missing after a passing harness",
+                    report=report_rel)
+        gate.record("displays_multi_screen_exe", INVALID,
+                    "display report is missing after a passing harness",
+                    report=report_rel)
+        skip_remaining(
+            "display report is unreadable; verdicts cannot be trusted",
             ("static_before_performance_alpha", "performance_alpha_health",
              "static_before_stability_alpha", "stability_alpha",
              "dist_manifest_final", "final_source_clean",
              "final_toolchain_lock"),
         )
         return finish()
+    display_report = _load_json(report_paths[0],
+                                "display verification report")
+    single_display, multi_display, display_detail = _displays_outcomes(
+        display_report, receipt)
+    gate.record(
+        "displays_single_screen_exe", single_display,
+        display_detail or display_report["single_screen_baseline"]["detail"],
+        report=report_rel)
+    gate.record(
+        "displays_multi_screen_exe", multi_display,
+        display_report["multi_screen_certification"]["detail"],
+        report=report_rel)
+    if single_display != PASS:
+        skip_remaining(
+            "single-screen display baseline did not pass; the candidate "
+            "is not verifiable on this machine",
+            ("static_before_performance_alpha", "performance_alpha_health",
+             "static_before_stability_alpha", "stability_alpha",
+             "dist_manifest_final", "final_source_clean",
+             "final_toolchain_lock"),
+        )
+        return finish()
+
 
     if recheck_static_binding("static_before_performance_alpha") != PASS:
         skip_remaining(

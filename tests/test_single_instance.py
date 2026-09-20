@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from PySide6.QtNetwork import QLocalServer
 
 from retirement_pet.single_instance import (
     QUIET_COMMAND,
@@ -103,3 +104,37 @@ def test_stale_server_cleared(qt_application):
         assert fresh.acquire()  # removeServer cleared the stale entry
     finally:
         fresh.release()
+
+
+def test_cr13_02_server_socket_options_are_user_scoped(qt_application):
+    """CR13-02: the named-pipe endpoint is created with a same-user DACL
+    (UserAccessOption); username-based naming alone is not authorisation."""
+    guard = SingleInstanceGuard(name="pytest-user-scope-test")
+    try:
+        assert guard.acquire()
+        server = guard._server
+        assert server is not None and server.isListening()
+        options = server.socketOptions()
+        assert options & QLocalServer.UserAccessOption, hex(int(options))
+    finally:
+        guard.release()
+
+
+def test_cr13_02_second_instance_connects_under_same_user(qt_application):
+    """The user-scoped DACL must not break the normal same-user flows."""
+    shown = []
+    primary = SingleInstanceGuard(name="pytest-scope-flow-test")
+    primary.on_show_requested = lambda: shown.append(True)
+    assert primary.acquire()
+    try:
+        secondary = SingleInstanceGuard(name="pytest-scope-flow-test")
+        assert not secondary.acquire()  # same user connects and notifies
+        import time
+
+        deadline = time.time() + 2
+        while not shown and time.time() < deadline:
+            qt_application.processEvents()
+            time.sleep(0.02)
+        assert shown
+    finally:
+        primary.release()

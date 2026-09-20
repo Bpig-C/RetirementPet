@@ -167,3 +167,61 @@ def test_unknown_action_rejected(controller):
     from retirement_pet.models import ActionId as A
 
     assert not controller.request(A.BLINK, "test")  # blink not a main action
+
+
+# -- CR-C06: a global request gate implements app-level "disabled" mode ------
+
+
+def test_request_gate_rejects_every_source(controller):
+    controller.set_request_gate(
+        lambda action_id, source, force: action_id is not ActionId.STRETCH)
+
+    assert controller.request(ActionId.STRETCH, "random") is False
+    assert controller.request(ActionId.STRETCH, "resolve:context", force=True) \
+        is False
+    assert controller.current_action() is None
+
+    # other semantics pass, from any source, gated args stay intact
+    assert controller.request(ActionId.WORK, "resolve:context", force=True)
+    assert controller.current_action() is ActionId.WORK
+    assert controller.request(ActionId.STRETCH, "random", force=True) is False
+    assert controller.current_action() is ActionId.WORK
+
+
+def test_request_gate_can_be_cleared(controller):
+    controller.set_request_gate(lambda action_id, source, force: False)
+    assert controller.request(ActionId.WORK, "test") is False
+    controller.set_request_gate(None)
+    assert controller.request(ActionId.WORK, "test") is True
+
+
+def test_gate_does_not_block_ending(controller):
+    controller.request(ActionId.WORK, "test")
+    controller.set_request_gate(lambda action_id, source, force: False)
+    assert controller.end_current("gate-test") is True
+    assert controller.current_action() is None
+
+
+# -- C06-R2: loop=False plays ONE material pass, timed by the caller ---------
+
+
+def test_single_pass_material_duration(controller):
+    # the caller measures the ACTIVE material and supplies its full-pass
+    # duration; the engine does not guess timing from frame counts
+    assert controller.request(
+        ActionId.WORK, "panel", force=True,
+        payload={"loop": False, "single_pass_ms": 1200})
+    assert controller.current.duration_ms == 1200
+
+
+def test_single_pass_without_material_falls_back_to_minimum(controller):
+    assert controller.request(
+        ActionId.WORK, "panel", force=True, payload={"loop": False})
+    assert controller.current.duration_ms == 10_000
+
+
+def test_single_pass_rejects_non_positive_material_duration(controller):
+    assert controller.request(
+        ActionId.WORK, "panel", force=True,
+        payload={"loop": False, "single_pass_ms": 0})
+    assert controller.current.duration_ms == 10_000

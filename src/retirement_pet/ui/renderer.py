@@ -59,8 +59,12 @@ class CatRenderer:
         self._engine_overlay.render(painter, rect, snap)
 
     def render_body(self, painter: QPainter, rect: QRectF,
-                    snap: RenderSnapshot) -> None:
-        """Paint character-owned pixels only."""
+                    snap: RenderSnapshot, layout=None) -> None:
+        """Paint character-owned pixels only.
+
+        ``layout`` is accepted for PetWindow protocol compatibility; the
+        programmatic cat owns its own canvas mapping and ignores it.
+        """
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
         scale = min(rect.width(), rect.height()) / CANVAS
@@ -151,8 +155,11 @@ class CatRenderer:
 
         t = snap.time_ms / 1000.0
         elapsed = snap.elapsed_ms / 1000.0
+        # breath and tail sway share ONE 3.2s period so the official pack
+        # builder can sample a seamless idle loop (V13-07): 16 frames at
+        # 200ms cover exactly one period and the seam lands on frame 0.
         breath = math.sin(2 * math.pi * t / 3.2)
-        sway = math.sin(2 * math.pi * t / 3.5)
+        sway = math.sin(2 * math.pi * t / 3.2)
         bounce = 0.0
         if action is ActionId.INTERACT:
             decay = max(0.0, 1.0 - elapsed / 1.5)

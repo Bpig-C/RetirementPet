@@ -102,6 +102,17 @@ class AssetBundle:
             return self._sequence_visual(spec)
         return self._parts_visual(spec)
 
+    def action_frame_count(self, action_key: str) -> int:
+        """Declared sequence frame count from the manifest, without loading
+        any pixmap.  0 when the action is parts-based or undeclared.  Used
+        for control enablement; actual playback reads loaded frames."""
+        spec = self._manifest.get("actions", {}).get(action_key)
+        if not isinstance(spec, dict):
+            return 0
+        if spec.get("mode", "parts") != "sequence":
+            return 0
+        return len(spec.get("frames", []))
+
     def _sequence_visual(self, spec: dict) -> SequenceVisual | None:
         frames = []
         for rel in spec.get("frames", []):

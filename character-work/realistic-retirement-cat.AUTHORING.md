@@ -3,7 +3,8 @@
 > 返回 [角色工作区索引](README.md) · 阅读
 > [通用角色库扩展指南](../docs/CHARACTER_LIBRARY_GUIDE.md) · 查看
 > [生成与来源记录](realistic-retirement-cat.PROVENANCE.md) · 对照
-> [canonical 包清单](../assets/petpack/README.md)
+> [canonical 包清单](../assets/petpack/README.md) · 跟踪
+> [Blender MVP 与后续路线](../docs/FUTURE_WORK.md#r1-blend-01-更拟真退休小猫-blender-动画-mvp)
 
 `realistic-retirement-cat/` 是可修改的 PetPack 源目录，不是运行时角色库。当前
 `0.1.1` 是一个可靠的静态竖切版本：`core.idle`、`core.work` 和 `core.rest`
@@ -48,7 +49,8 @@ $rpPackOutput = ".\.release\author-packs\realistic-retirement-cat-$rpPackVersion
 
 1.1.1 尚未把 `layered`、Variant、专属动作调度、包内音效和 manifest geometry
 接入完整作者流程。当前正文按整张 PNG 适配固定角色区域，透明边距和画布长宽比会
-直接影响桌面显示大小。
+直接影响桌面显示大小。Blender 主工程、高分辨率纹理与草稿必须保存在本目录之外；
+本目录的所有文件都会进入构建输入，不能混入 `.blend` 等 PetPack 不支持的格式。
 
 ## 下一轮素材替换顺序
 

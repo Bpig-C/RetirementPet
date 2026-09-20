@@ -27,6 +27,7 @@ class RandomActionScheduler:
         enabled: Callable[[], bool] | None = None,
         min_interval_s: Callable[[], float] | None = None,
         max_interval_s: Callable[[], float] | None = None,
+        mode_allowed: Callable[[str], bool] | None = None,
     ):
         self._controller = controller
         self._clock = clock
@@ -34,6 +35,9 @@ class RandomActionScheduler:
         self._enabled = enabled or (lambda: True)
         self._min_interval = min_interval_s or (lambda: 45.0)
         self._max_interval = max_interval_s or (lambda: 120.0)
+        # V12-06 per-action mode gate: only "auto" semantics may fire here;
+        # "manual"/"disabled" are excluded from random proposals.
+        self._mode_allowed = mode_allowed or (lambda semantic: True)
         self._next_fire_ms: int | None = None
 
     # -- helpers -------------------------------------------------------------
@@ -81,7 +85,8 @@ class RandomActionScheduler:
         candidates = [
             spec
             for spec in self._random_specs()
-            if not self._controller.is_on_cooldown(spec.action_id, now_ms)
+            if self._mode_allowed(spec.action_id.value)
+            and not self._controller.is_on_cooldown(spec.action_id, now_ms)
             and spec.weight > 0
         ]
         if not candidates:

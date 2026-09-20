@@ -2,3 +2,6 @@
 PyInstaller==6.22.2
 pyinstaller-hooks-contrib==2026.6
 pytest==9.1.1
+winrt-Windows.Media.Playback==3.2.1
+winrt-Windows.Media.Core==3.2.1
+winrt-Windows.Storage.Streams==3.2.1

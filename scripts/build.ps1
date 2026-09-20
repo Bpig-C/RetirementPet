@@ -153,7 +153,13 @@ if ((Get-Sha256Hex $ToolchainAttestation) -ne
 }
 & git -c core.autocrlf=false archive --format=tar "--output=$Archive" $Commit
 if ($LASTEXITCODE -ne 0) { Write-Error "git archive failed" }
-& tar -xf $Archive -C $StageRoot
+# GNU tar (Git for Windows /usr/bin/tar) misreads "E:\..." as a remote
+# host spec; prefer the Windows system tar when present.
+$TarExe = Join-Path $env:SystemRoot "System32\tar.exe"
+if (-not (Test-Path -LiteralPath $TarExe -PathType Leaf)) {
+    $TarExe = "tar"
+}
+& $TarExe -xf $Archive -C $StageRoot
 if ($LASTEXITCODE -ne 0) { Write-Error "git archive extraction failed" }
 
 $StageReparse = @(Get-ChildItem -LiteralPath $StageRoot -Recurse -Force |

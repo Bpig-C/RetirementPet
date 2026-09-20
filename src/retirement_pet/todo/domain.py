@@ -4,11 +4,23 @@ FROZEN RULES (product decision):
 - no self-parent, no cycles, max depth 6;
 - a child inherits its parent's horizon BY DEFAULT but the user may change
   it per task; horizons never migrate automatically by date;
-- task and subtree completion states are independent (NO cascade);
+- completion is explicit-scope (V13-03): the default ``scope='self'``
+  completes only the target and never cascades; an explicit
+  ``scope='subtree'`` completes the root AND every unfinished descendant in
+  ONE transaction, keeping hierarchy and order; restore is scoped the same
+  way and never guesses which descendants were cascade-completed;
 - deleting/archiving a parent removes the whole subtree in ONE transaction;
 - at most ONE active focus task at any time;
 - the task store is USER GLOBAL data: it belongs to the user, never to a
   character pack, and switching characters never touches it.
+
+v2 additions (1.2.0):
+- importance and urgency are INDEPENDENT user-set axes; nothing derives
+  them from title, horizon or due date, and migration leaves them unset;
+- archiving is explicit and reversible, stored per task (archived flag +
+  archived_at); completion states are never changed by archiving;
+- ``note`` is plain user text (newlines/emoji allowed, bounded length) and
+  never crosses into the pet runtime (context bridge stays title-free).
 """
 
 from __future__ import annotations
@@ -29,6 +41,46 @@ class Horizon(str, Enum):
 class Status(str, Enum):
     OPEN = "open"
     DONE = "done"
+
+
+class Level(str, Enum):
+    """Independent quadrant axis value (v2).
+
+    ``importance`` and ``urgency`` are two independent axes and are
+    deliberately NOT derived from horizon, due date or title.  ``None``
+    (the v1 migration default) means unclassified; the quadrant view keeps
+    an explicit unclassified entry.
+    """
+
+    HIGH = "high"
+    LOW = "low"
+
+
+@dataclass(frozen=True, slots=True)
+class SubtreeSummary:
+    """Scope facts for delete/complete confirmation dialogs (V13-03).
+
+    Counts describe the whole subtree rooted at the task (inclusive);
+    ``open``/``archived``/``done`` count tasks in that state.  ``ids`` is
+    the exact id set the summary was computed over, so a UI can drop
+    per-task state (kept note drafts) after the confirmed operation.
+    Contains no titles or notes.
+    """
+
+    total: int
+    open: int
+    done: int
+    archived: int
+    focus_included: bool
+    ids: frozenset[str]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.ids, frozenset):
+            raise TypeError("ids must be a frozenset")
+        if self.total != len(self.ids):
+            raise ValueError("total must match ids size")
+        if self.open + self.done != self.total:
+            raise ValueError("open + done must equal total")
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +113,9 @@ class FocusProjection:
 
 MAX_DEPTH = 6
 _ALL_HORIZONS = {h.value for h in Horizon}
+_ALL_LEVELS = {level.value for level in Level}
+#: plain-text note bound; UI must surface the limit, never silently truncate
+MAX_NOTE_CHARS = 10_000
 
 
 class TodoError(ValueError):
@@ -83,6 +138,12 @@ class Task:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     completed_at: datetime | None = None
+    # -- v2 fields (defaults are exactly what the v1 migration writes) -----
+    importance: Level | None = None
+    urgency: Level | None = None
+    archived: bool = False
+    archived_at: datetime | None = None
+    note: str = ""
 
     # -- factory -----------------------------------------------------------------
 
@@ -106,6 +167,43 @@ class Task:
 
     def set_due_date(self, due_date: date | None) -> None:
         self.due_date = due_date
+        self.touch()
+
+    def set_classification(self, *,
+                           importance: Level | None = ...,
+                           urgency: Level | None = ...) -> None:
+        """Set the independent quadrant axes (explicit user action only).
+
+        Each axis is set only when a value is passed; ``None`` means
+        unclassified.  Untouched axes keep their current value.
+        """
+        if importance is not ...:
+            self.importance = _validate_level(importance)
+        if urgency is not ...:
+            self.urgency = _validate_level(urgency)
+        self.touch()
+
+    def set_note(self, note: str) -> None:
+        if not isinstance(note, str):
+            raise TodoError("note must be a string")
+        if len(note) > MAX_NOTE_CHARS:
+            raise TodoError(f"note longer than {MAX_NOTE_CHARS} chars")
+        self.note = note
+        self.touch()
+
+    def archive(self) -> None:
+        """Mark explicitly archived; status and completion never change."""
+        if self.archived:
+            return
+        self.archived = True
+        self.archived_at = datetime.now()
+        self.touch()
+
+    def unarchive(self) -> None:
+        if not self.archived:
+            return
+        self.archived = False
+        self.archived_at = None
         self.touch()
 
     def complete(self) -> None:
@@ -135,6 +233,14 @@ def _validate_title(title: str) -> str:
     if len(stripped) > 200:
         raise TodoError("title too long")
     return stripped
+
+
+def _validate_level(value: Level | None) -> Level | None:
+    if value is None:
+        return None
+    if not isinstance(value, Level):
+        raise TodoError("quadrant level must be a Level or None")
+    return value
 
 
 # -- tree constraints -----------------------------------------------------------------

@@ -1,6 +1,6 @@
 [project]
 name = "retirement-pet"
-version = "1.1.1"
+version = "1.3.0"
 description = "RetirementPet - a quiet desktop companion counting down to retirement"
 requires-python = ">=3.12"
 dependencies = [

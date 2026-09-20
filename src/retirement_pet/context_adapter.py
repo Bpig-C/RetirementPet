@@ -214,7 +214,14 @@ class PerformanceBridge:
             self._controller.end_current(f"resolve:{reason}")
         else:
             # The resolver already owns priority decisions; force the executor.
-            self._controller.request(action_id, f"resolve:{reason}", force=True)
+            accepted = self._controller.request(
+                action_id, f"resolve:{reason}", force=True)
+            if not accepted:
+                # App-level veto (e.g. semantic disabled): the resolver's
+                # choice is unplayable, so a performance left over from an
+                # earlier resolve must not outlive the facts that produced
+                # it (C06-R1) - discipline contexts stay true regardless.
+                self._controller.end_current(f"resolve:{reason}:vetoed")
         if perf.missing_semantics and self._missing_listener is not None:
             try:
                 self._missing_listener(perf.missing_semantics)

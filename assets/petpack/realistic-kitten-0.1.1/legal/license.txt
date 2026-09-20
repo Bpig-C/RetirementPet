@@ -1,0 +1,8 @@
+Pack license / 包许可说明
+========================
+
+All sprites, geometry and metadata in this pack are the original or AI-assisted work of the pack author (community.retirementpet).  No third-party material is included.
+
+Permission is granted for personal use and redistribution as part of a RetirementPet character pack, provided this notice and attribution are preserved.
+
+本包内全部图像与几何数据均为作者原创或 AI 辅助创作内容，作者身份为 community.retirementpet，不含第三方素材；允许随 RetirementPet 角色包进行个人使用与再分发，须保留本声明与署名。

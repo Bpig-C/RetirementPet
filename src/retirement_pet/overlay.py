@@ -17,6 +17,15 @@ DOUBLE_BLINK_GAP_MS = 180
 DOUBLE_BLINK_CHANCE = 0.15
 GAZE_MAX = 1.0
 
+#: bubble gate from the visibility policy (V12-06): a policy names the
+#: LOWEST importance it still shows
+_BUBBLE_MIN_IMPORTANCE = {
+    "all": "normal",
+    "important": "important",
+    "safe_errors_only": "error",
+}
+_IMPORTANCE_RANK = {"normal": 0, "important": 1, "error": 2}
+
 
 class OverlayController:
     def __init__(self, clock: Clock, rng: random.Random | None = None):
@@ -30,6 +39,7 @@ class OverlayController:
         self._effects: dict[str, int] = {}  # kind -> expire monotonic ms
         self._bubble_text: str | None = None
         self._bubble_until_ms: int = 0
+        self._bubble_policy: str = "all"
 
     # -- gaze ---------------------------------------------------------------
 
@@ -43,7 +53,17 @@ class OverlayController:
 
     # -- bubbles & effects ----------------------------------------------------
 
-    def show_bubble(self, text: str, duration_ms: int = 4_000) -> None:
+    def set_bubble_policy(self, policy: str) -> None:
+        """Apply the resolved visibility-policy bubble gate (V12-06)."""
+        self._bubble_policy = policy \
+            if policy in _BUBBLE_MIN_IMPORTANCE else "all"
+
+    def show_bubble(self, text: str, duration_ms: int = 4_000,
+                    importance: str = "normal") -> None:
+        minimum = _BUBBLE_MIN_IMPORTANCE.get(self._bubble_policy, "normal")
+        if _IMPORTANCE_RANK.get(importance, 0) \
+                < _IMPORTANCE_RANK[minimum]:
+            return
         now = self._clock.monotonic_ms()
         self._bubble_text = text
         self._bubble_until_ms = now + duration_ms

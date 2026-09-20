@@ -13,6 +13,7 @@
 | 工作区 | 版本 | 状态 | 相关记录 |
 |---|---:|---|---|
 | [半写实退休猫](realistic-retirement-cat/) | 0.1.1 | 静态竖切，可构建与预检 | [作者说明](realistic-retirement-cat.AUTHORING.md) · [生成与来源](realistic-retirement-cat.PROVENANCE.md) |
+| [真实幼猫](realistic-kitten-0.1.1/) | 0.1.1 | 八场景透明静态图，已修复浅色毛发缺损 | [修复与来源](realistic-kitten-0.1.1/PROVENANCE.md) |
 
 半写实猫的 canonical 构建位于
 [assets/petpack/examples](../assets/petpack/README.md)。工作区内任一已分发内容发生

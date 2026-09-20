@@ -24,6 +24,7 @@ from PySide6.QtCore import QRectF
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 
 from retirement_pet.assets import SequenceVisual
+from retirement_pet.character_layout import CharacterGeometry
 from retirement_pet.lru_cache import LruByteCache
 from retirement_pet.models import ActionId
 from retirement_pet.petpack.archive import PetpackArchive
@@ -42,12 +43,40 @@ _ACTION_TO_SEMANTIC: dict[str, str] = {
 
 MIN_FRAME_DURATION_MS = 33  # duplicated budget: visible refresh <= 30 FPS
 
+#: author-preview columns per action before bounded sampling kicks in.
+#: Sized so a 16-frame MVP sequence (Blender first batch) plus its seam
+#: fits WITHOUT truncation; longer sequences keep first frames + LAST
+#: frame + seam and report what was omitted (CR-T04).
+MAX_PREVIEW_COLUMNS = 18
+
 
 @dataclass(frozen=True)
 class _Profile:
     kind: str                     # static | sequence
     static_asset: str | None      # decoded asset id for static
     frames: tuple[tuple[str, int], ...]  # (asset id, duration_ms)
+
+
+@dataclass(frozen=True)
+class PreviewPoint:
+    """One wall-clock sample the author preview paints through render_body."""
+
+    elapsed_ms: int
+    label: str                    # column caption: "static" | "f0 500ms" | ...
+    frame_index: int | None       # None for the loop-seam / fallback sample
+
+
+@dataclass(frozen=True)
+class PreviewRow:
+    """Per-semantic preview plan: one row of the author contact sheet."""
+
+    semantic: str
+    action_value: str             # ActionId value that drives render_body
+    kind: str                     # static | sequence | fallback
+    frame_count: int
+    total_ms: int
+    points: tuple[PreviewPoint, ...]
+    omitted_frames: int = 0       # frames not sampled by a truncated row
 
 
 class PackCharacterRuntime:
@@ -323,7 +352,86 @@ class PackCharacterRuntime:
             painter.end()
         return image
 
+    def preview_schedule(self) -> tuple[PreviewRow, ...]:
+        """Author-preview sampling plan (V12-03 CR-T02/T03, CR-T04).
+
+        One row per bound semantic plus one fallback row per missing core
+        semantic.  Sequence rows sample every frame start AND the loop seam
+        (total wraps back to frame 0), so uneven frame lengths and the
+        first/last transition are painted exactly as the desktop draws
+        them.  A 16-frame MVP sequence plus seam fits whole; longer rows
+        are bounded to MAX_PREVIEW_COLUMNS by keeping the FIRST frames,
+        the LAST frame and the seam, with omitted_frames telling how many
+        were skipped - the leading frames are never silently presented as
+        the whole action.  The caller paints these points through
+        ``render_body``; nothing here decodes assets or touches global
+        state.
+        """
+        rows: list[PreviewRow] = []
+        for semantic, profile in self._profiles.items():
+            action_value = semantic.removeprefix("core.")
+            if profile is None:
+                rows.append(PreviewRow(
+                    semantic, action_value, "fallback", 0, 0,
+                    (PreviewPoint(0, "->idle", None),)))
+                continue
+            if profile.kind == "static":
+                rows.append(PreviewRow(
+                    semantic, action_value, "static", 1, 0,
+                    (PreviewPoint(0, "static", 0),)))
+                continue
+            starts = []
+            elapsed = 0
+            for _asset_id, duration in profile.frames:
+                starts.append(elapsed)
+                elapsed += duration
+            total = elapsed
+            points = [PreviewPoint(starts[i], f"f{i} {duration}ms", i)
+                      for i, (_asset_id, duration) in enumerate(profile.frames)]
+            if total > 0:
+                points.append(PreviewPoint(total, f"seam {total}ms", None))
+            if not points:
+                # An empty sequence paints nothing; one blank sample keeps
+                # the contact-sheet row honest about that.
+                points = [PreviewPoint(0, "empty", None)]
+            omitted = 0
+            if len(points) > MAX_PREVIEW_COLUMNS:
+                # Bounded sampling that never loses the ending: the last
+                # FRAME and the seam always survive (CR-T04).
+                frame_points = points[:-1]
+                seam_point = points[-1]
+                head = MAX_PREVIEW_COLUMNS - 2
+                omitted = len(frame_points) - head - 1
+                points = frame_points[:head] + [frame_points[-1], seam_point]
+            rows.append(PreviewRow(
+                semantic, action_value, "sequence",
+                len(profile.frames), total, tuple(points),
+                omitted_frames=omitted))
+        return tuple(rows)
+
     # -- painting -----------------------------------------------------------------
+
+    def is_animated_for(self, action) -> bool:
+        """True when the visual for this action actually advances
+        (sequence material); a static profile draws identical pixels
+        every tick, so repaints can be skipped (V12-08 downshift)."""
+        semantic = _ACTION_TO_SEMANTIC.get(
+            getattr(action, "value", action), "core.idle")
+        profile = self._profiles.get(semantic)
+        return profile is not None and profile.kind == "sequence"
+
+    def semantic_sequence_ms(self, semantic: str) -> tuple[int, ...] | None:
+        """Per-frame durations of one semantic's sequence material.
+
+        This is the material's OWN timing (C06-R2): a single full pass
+        lasts the sum of these durations.  None when the semantic is
+        missing or draws from a static asset - the loop control must not
+        offer a material pass that does not exist.
+        """
+        profile = self._profiles.get(semantic)
+        if profile is None or profile.kind != "sequence":
+            return None
+        return tuple(duration for _, duration in profile.frames)
 
     def capabilities(self):
         """Adapter to the v2 resolver capability table.
@@ -357,8 +465,25 @@ class PackCharacterRuntime:
         """Compatibility entry point; PetWindow uses ``render_body``."""
         self.render_body(painter, rect, snapshot)
 
-    def render_body(self, painter: QPainter, rect: QRectF, snapshot) -> None:
-        """Paint pack-owned body pixels without engine overlays."""
+    def character_geometry(self):
+        """Manifest geometry for the shared layout transform, or None.
+
+        Parsed once per immutable revision; a malformed block keeps the
+        window on the legacy whole-PNG fit instead of guessing anchors.
+        """
+        if not hasattr(self, "_geometry_parsed"):
+            self._geometry_parsed = CharacterGeometry.from_character(
+                self._character)
+        return self._geometry_parsed
+
+    def render_body(self, painter: QPainter, rect: QRectF, snapshot,
+                    layout=None) -> None:
+        """Paint pack-owned body pixels without engine overlays.
+
+        ``layout`` is the window-computed :class:`BodyLayout` shared with
+        bubbles and hit testing; without it the body falls back to the
+        legacy whole-PNG fit centered in ``rect``.
+        """
         if not self.prepare():
             return
         semantic = _ACTION_TO_SEMANTIC.get(
@@ -376,7 +501,23 @@ class PackCharacterRuntime:
                           if idle is not None else None)
             pixmap = self._decode(idle_asset) \
                 if idle_asset is not None else None
-        if pixmap is not None:
+        if pixmap is None:
+            return
+        if layout is not None and not layout.body_rect.isEmpty():
+            target = QRectF(layout.body_rect)
+        else:
+            target = None
+        if target is not None:
+            source = QRectF(0.0, 0.0,
+                            float(pixmap.width()), float(pixmap.height()))
+            painter.save()
+            try:
+                painter.setRenderHint(
+                    QPainter.RenderHint.SmoothPixmapTransform, True)
+                painter.drawPixmap(target, pixmap, source)
+            finally:
+                painter.restore()
+        else:
             self._draw_fitted(painter, rect, pixmap)
 
     @staticmethod
