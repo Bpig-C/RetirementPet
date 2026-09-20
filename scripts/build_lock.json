@@ -22,7 +22,16 @@
     "pytest": "9.1.1",
     "pywin32-ctypes": "0.2.3",
     "setuptools": "84.0.0",
-    "shiboken6": "6.8.3"
+    "shiboken6": "6.8.3",
+    "typing-extensions": "4.16.0",
+    "winrt-runtime": "3.2.1",
+    "winrt-windows-foundation": "3.2.1",
+    "winrt-windows-foundation-collections": "3.2.1",
+    "winrt-windows-media-control": "3.2.1",
+    "winrt-windows-media-core": "3.2.1",
+    "winrt-windows-media-playback": "3.2.1",
+    "winrt-windows-storage-streams": "3.2.1",
+    "winrt-windows-system": "3.2.1"
   },
   "packaging": {
     "mode": "onedir",

@@ -37,15 +37,27 @@ from retirement_pet.models import ActionId, LifeStage, RenderSnapshot
 from retirement_pet.ui.renderer import CatRenderer
 
 #: sampled frames per action (time in ms within the action loop)
+#: V13-07: idle is a SEAMLESS 16-frame loop - the programmatic cat's
+#: breath and tail sway share one 3.2s period, so samples 0..3000 step
+#: 200 cover exactly one period (2-4s seamless-loop requirement).
+#: work is a seamless 4-frame typing loop (leg bob period 250ms).
 FRAME_PLAN: dict[str, tuple[int, ...]] = {
-    "core.idle": (0, 400, 800, 1200),
-    "core.work": (0, 600),
+    "core.idle": tuple(range(0, 3200, 200)),
+    "core.work": (0, 250, 500, 750),
     "core.rest": (0, 700),
     "core.eat": (0, 500),
     "core.exercise": (0, 500),
     "core.meeting": (0, 600),
     "core.music": (0, 500),
 }
+
+#: per-frame duration for sequence actions, keyed by semantic
+SEQUENCE_FRAME_MS = {
+    "core.idle": 200,   # 16 x 200 = 3200ms: exactly one breath period
+    "core.work": 250,   # 4 x 250 = 1000ms: exactly two leg-bob periods
+}
+
+OFFICIAL_PACKAGE_VERSION = "1.0.2"
 LOGICAL_CANVAS = 256
 BODY_PIXELS = 512
 THUMBNAIL_PIXELS = 128
@@ -139,12 +151,15 @@ def build_manifest(files: dict[str, bytes]) -> dict:
         for i in range(len(times)):
             path = f"assets/{slug}_{i}.png"
             assets.append(asset_entry(f"asset.{slug}.{i}", path))
-        if semantic == "core.idle":
-            frames = [{"asset": f"asset.{slug}.{i}", "duration_ms": 250}
+        if semantic in SEQUENCE_FRAME_MS:
+            frame_ms = SEQUENCE_FRAME_MS[semantic]
+            frames = [{"asset": f"asset.{slug}.{i}",
+                       "duration_ms": frame_ms}
                       for i in range(len(times))]
+            policy_tags = ["silent", "meeting_safe", "dnd_safe"]                 if semantic == "core.idle"                 else ["silent"]
             actions.append({
                 "id": action_id, "semantic": semantic,
-                "policy_tags": ["silent", "meeting_safe", "dnd_safe"],
+                "policy_tags": policy_tags,
                 "lifecycle": {"loop": {"renderer": {
                     "type": "sequence", "frames": frames}}},
                 "user_modes": ["auto", "manual", "disabled"],
@@ -186,8 +201,9 @@ def build_manifest(files: dict[str, bytes]) -> dict:
         "schema_version": "1.0",
         "package": {
             "publisher_id": "official",
+            "publisher_ref": "official",
             "id": "retirement-cat-official",
-            "version": "1.0.1",
+            "version": OFFICIAL_PACKAGE_VERSION,
             "display_name": {"zh-CN": "官方退休猫", "en": "Official Retirement Cat"},
         },
         "compatibility": {
@@ -268,7 +284,7 @@ def deterministic_zip(manifest: dict, files: dict[str, bytes]) -> bytes:
 def main() -> int:
     app = QApplication.instance() or QApplication([])
     out_path = Path(sys.argv[1]) if len(sys.argv) > 1 else \
-        Path("assets/petpack/retirement-cat-official-1.0.1.petpack")
+        Path("assets/petpack/retirement-cat-official-1.0.2.petpack")
     try:
         out_path = validate_output_path(out_path)
     except ValueError as exc:

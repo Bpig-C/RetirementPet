@@ -74,7 +74,29 @@ class RhythmController:
 
     # -- main entry --------------------------------------------------------
 
+    def activity_state(self) -> str:
+        """Explainable aggregate activity fact (V13-06).
+
+        ``active`` = recent keyboard/mouse input (below the threshold);
+        ``idle`` = no input for a while; ``unknown`` = the system idle
+        provider is unavailable (never guessed as rest).  Contains no
+        information about WHAT was typed or which window was focused.
+        """
+        idle = self._monitor.idle_seconds()
+        if idle is None:
+            return "unknown"
+        return "active" if idle <= ACTIVE_THRESHOLD_S else "idle"
+
+    def link_enabled(self) -> bool:
+        return bool(self._cfg("activity_link_enabled", True))
+
     def tick(self) -> None:
+        # V13-06: the user may switch the activity linking off entirely;
+        # disabled means this controller does literally nothing (no
+        # timers, no subscriptions - it only ever ran inside the 1 Hz
+        # service tick anyway, which continues for other services)
+        if not self.link_enabled():
+            return
         idle = self._monitor.idle_seconds()
         now_s = self._now_s()
         if idle is None:

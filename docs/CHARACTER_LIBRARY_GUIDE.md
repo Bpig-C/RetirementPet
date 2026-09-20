@@ -1,6 +1,6 @@
 # RetirementPet 角色库扩展指南
 
-> 适用于 RetirementPet 1.1.1 和 PetPack 1.0
+> 适用于 RetirementPet 1.1.1/1.2.0 和 PetPack 1.0（作者工具链在 1.2.0 补齐）
 > 本文解释当前已经可用的角色创作、构建、导入和更新流程
 > 相关入口包括[文档中心](README.md)、[PetPack 规范](PETPACK_SPEC_1_0.md)和
 > [内容与权利政策](CONTENT_POLICY.md) · [角色工作区索引](../character-work/README.md)
@@ -48,44 +48,39 @@ PetPack
 
 ### 1. 建立作者工作区
 
-当前最可靠的做法是复制
-[半写实退休猫源目录](../character-work/realistic-retirement-cat/)，再整体更换身份、
-来源和素材。它是最容易通过 1.1.1 Runtime 的起点，但仍带有已记录的
-`package.publisher_ref` 规范漂移，不能当作最终规范模板。也可以运行下面的命令
-建立骨架。
+1.2.0 起，推荐直接用 `init` 生成一个**可直接 build、validate、preflight 通过**
+的最小原创静态包，再在其上替换素材与身份。它自带可用透明图、geometry、
+idle、缩略图和来源许可声明，不依赖任何外部下载。
 
 ```powershell
 Set-Location <project-root>
 .venv\Scripts\python.exe scripts\petpack_cli.py init character-work\my-character-pack
 ```
 
-`init` 目前只生成最小目录和不完整 manifest 骨架，不能直接通过 `validate`。作者
-仍需参考[半写实猫 manifest](../character-work/realistic-retirement-cat/petpack.json)
-补齐 `package.publisher_ref`、`compatibility`、`publishers`、
-`rights_declarations`、`sources`、`legal_files`、`assets`、`actions`、
-`characters` 和 geometry。
-
-推荐目录如下。
+模板使用占位身份 `community.example/my-pack/0.1.0`、角色 `demo`，目录如下。
 
 ```text
 character-work/my-character-pack/
-├─ petpack.json
+├─ petpack.json          # 完整 manifest（含 publisher_ref、compatibility、rights）
 ├─ assets/
-│  └─ characters/my-character/
-│     ├─ idle.png
-│     ├─ work.png
-│     └─ rest/
-│        ├─ 000.png
-│        └─ 001.png
+│  ├─ idle.png           # 64×64 透明背景静态帧（可绘制的圆角形体）
+│  └─ thumbnail.png      # 32×32 角色缩略图
 └─ legal/
-   └─ license.txt
+   └─ license.txt        # 双语原创许可声明
 ```
+
+把 `assets/idle.png` 换成自己的图（同步改 manifest 里的像素声明）、改掉
+publisher/package/series/character 身份与许可声明后，即可走第 6 节的完整链路。
+若要制作写实风格角色，也可以继续复制
+[半写实退休猫源目录](../character-work/realistic-retirement-cat/)作参考；它带有
+已记录的 `package.publisher_ref` 规范漂移，不能当作规范模板，`lint` 会把这类
+漂移报出来。
 
 作者源目录只保存可编辑输入。构建出的 `.petpack` 放到 `.release/author-packs/` 或
 其他临时输出目录；要随程序提供的 canonical 示例才进入 `assets/petpack/examples/`。
 `build` 会收集源目录中除 `petpack.json` 外的每个文件；PSD、生成草稿、README 或
-高分辨率母版若留在源目录又未声明，会作为未声明成员被 validator 拒绝。此类作者
-资料应放在包源目录旁边，而不是包源目录里面。
+高分辨率母版若留在源目录又未声明，`lint` 会直接报错，`build` 会拒绝执行，不会
+悄悄把它们丢在包外。此类作者资料应放在包源目录旁边，而不是包源目录里面。
 
 ### 2. 先固定身份
 
@@ -158,24 +153,52 @@ SemVer 和 canonical content digest 共同确定。
 其他动作可以逐步增加。首版缺少 eat 或 meeting 时会继续显示这个角色的 idle，
 不会突然换回官方猫。
 
-### 6. 构建并做三层检查
+### 6. 编辑 → lint → build → validate → preflight → preview
+
+完整命令链（PowerShell；每一步的含义见其后的说明）：
 
 ```powershell
 Set-Location <project-root>
 
+# 1) 源树静态检查：接触图、帧数/时长/解码预算报告；不写任何文件
+.venv\Scripts\python.exe scripts\petpack_cli.py lint `
+  character-work\my-character-pack
+
+# 2) 确定性构建：相同源树得到逐字节相同的包
 .venv\Scripts\python.exe scripts\petpack_cli.py build `
   character-work\my-character-pack `
   .release\author-packs\my-character-pack-0.1.0.petpack
 
+# 3) 完整引擎校验（与 GUI 导入同源）
 .venv\Scripts\python.exe scripts\petpack_cli.py validate `
   .release\author-packs\my-character-pack-0.1.0.petpack
 
+# 4) GUI 导入同款预检门禁（PNG 可解码性、声明尺寸、Alpha、预算、idle 首帧）
 .venv\Scripts\python.exe scripts\petpack_cli.py preflight `
   .release\author-packs\my-character-pack-0.1.0.petpack
 
+# 5) 离屏预览：用真实 Runtime 逐帧渲染到 PNG 目录
+.venv\Scripts\python.exe scripts\petpack_cli.py preview `
+  .release\author-packs\my-character-pack-0.1.0.petpack `
+  .release\author-packs\preview
+
+# 6) 身份与计数速览
 .venv\Scripts\python.exe scripts\petpack_cli.py inspect `
   .release\author-packs\my-character-pack-0.1.0.petpack
 ```
+
+`lint` 在构建前把问题拦在源树上：输出每个角色每个语义一行的动作接触图
+（`contact demo/core.idle static action=action.idle frames=1 … decoded~16 KiB`）、
+全包解码工作集预算行，以及 `E:`（必须修）/`W:`（建议处理）两类 finding；
+有 finding 时退出码为 1。它检查 schema、`publisher_ref` 存在且可解析、声明与
+实物文件互相吻合（缺声明文件、多未声明文件都会报）、PNG 可解码且与声明像素
+一致、主体 PNG 有透明度（缩略图豁免）、geometry 锚点/边界在逻辑画布内、
+`core.idle` 绑定存在，以及帧数 ≤300、单帧 ≥33 ms、解码预算 ≤48 MiB。
+
+`build` 是确定性的：成员按名称排序、固定时间戳与权限、canonical JSON、
+DEFLATE 压缩，同一源树在任意输出位置得到逐字节相同的归档。源目录里存在未
+声明文件时构建直接拒绝（退出码 2）。对 `assets/petpack/` 下的官方包与
+canonical 示例冻结输出，构建一律拒绝覆盖。
 
 `validate` 检查当前已实现的归档、结构、媒体、rights 和部分动作 gate；它尚未完整
 覆盖 `compatibility`、`legal_files` 完整性、geometry、TextProfile、推荐项以及
@@ -183,6 +206,31 @@ Set-Location <project-root>
 主体 PNG、Alpha、预算和每角色 idle 首帧检查，`inspect` 显示身份、动作数、资产数
 和 content digest。四步成功是进入当前应用的必要检查，不等于已经证明 PetPack 1.0
 全部条款 conformance。
+
+`preview` 用与桌宠窗口完全相同的路径离屏绘制：manifest geometry 经
+`compute_body_layout` 换算到 232×236 的桌宠视口（打印 scale、foot 锚点与是否
+整体平移），再由 `PackCharacterRuntime.render_body` 按 `preview_schedule`
+的真实帧时间取样绘制——静态、sequence 帧起点、循环接缝（t=total 回到首帧）
+和未绑定语义的 idle 回退都会画出。每个样本写成
+`<角色>-<语义>-<序号>.png`，并生成一张接触图 `contact-<角色>.png`：每个语义
+一行、每个样本一列，行标注语义与帧数/总时长，列标注帧序号与帧时长，便于直接
+比较脚底位置、角色大小和循环首尾。预览不改变活动角色、Context、用户配置或
+用户库，也不发声。
+
+接触图采样上限是 18 列：16 帧以内的 MVP 序列（Blender 首批允许 8–16 帧）
+连同接缝完整采样，最后一帧不会被丢掉。更长的序列有界抽样，但始终保留
+首帧、末帧和接缝；省略数量写在行标注独立的一行 `+N frames omitted`（保证
+完整可读，不会被省略号截断），CLI 每行末尾另附
+`(N frame(s) not sampled)`，不会把前 15 帧静默当成整个动作。行宽超过 8 列
+自动换行成带 `(cont.)` 标注的续行；续行单元的列标注继续全局帧号
+（第二带是 f8 起，而不是重新从 f0 开始），接缝带保留 `seam <总时长>`。
+
+接触图的文字对环境有硬要求：绘制前会逐码位验证所选字体真的包含这些字形
+（含对标准系统字体目录的增量加载——离屏/无头平台可能以空字体库启动）；
+环境里没有任何字体能覆盖标签字形时，preview **拒绝生成接触图**并以退出码 1
+结束（输出 `REJECT: no installed font renders the contact-sheet caption
+glyphs …`），绝不会写出一张不可读的图再声称成功。文字全部限定在各自的
+省略+裁剪条带内，不会压到样本图上。
 
 ### 7. 导入和启用
 
@@ -193,6 +241,53 @@ Set-Location <project-root>
 切换时，新 Runtime 会先完成离屏 idle 首帧，再原子提交 ActiveSelection。失败会
 保留旧角色、恢复持久化权威，或在权威无法证明时进入 Bootstrap 安全模式。不要
 绕过界面直接改用户数据目录中的 catalog、revision 或 active selection。
+
+### 8. archive hash 与 content digest：什么时候需要新 Revision
+
+一个包有两个不同层面的哈希，混用会导致错误的版本决策：
+
+| 哈希 | 覆盖范围 | 何时变化 |
+|---|---|---|
+| `archive_sha256` | 整个 ZIP 容器的字节（封装框架 + 压缩方式） | 任何导致归档字节不同的重建，包括单纯重压缩 |
+| `content_digest` | canonical manifest + 各资产原始字节 | 仅当 manifest 内容或资产内容实际变化 |
+
+**只有 `content_digest` 变化才需要新 Revision。** 改了一张图、改了 manifest 里
+的任何声明 → digest 变化 → 必须提升 `package.version` 发布新 Revision。仅仅
+重新压缩、重打包（内容不变）→ 只有 archive hash 变化 → 不需要新 Revision，
+已安装的旧 pin 继续有效。
+
+1.2.0 修复了构建器的一个容器层缺陷：此前归档头部声明 DEFLATE，但每个成员实际
+以 STORED（未压缩）写入。修复后成员真正按 DEFLATE 压缩。对同样内容重新构建会
+得到不同的 archive hash，但 content digest 逐字节不变——这正是两个哈希分离的
+意义。不要为了让新构建的哈希对上旧记录而改动旧 pin；旧 pin 指向的是
+content digest，与容器封装无关。
+
+## 常见错误排查
+
+按命令链从早到晚排列；`lint` 的 `E:` 必须修复，`W:` 建议处理。
+
+| 输出（节选） | 原因与处理 |
+|---|---|
+| `lint E: undeclared files would be silently left out …: scratch-notes.txt` | 源目录里有 manifest 未声明的文件。要么加入 `assets`/`legal_files` 声明，要么移出源目录 |
+| `lint E: declared file is missing from the source tree: assets/idle.png` | manifest 声明了不存在的文件。补文件或删除声明 |
+| `lint E: package.publisher_ref is required (PETPACK_SPEC 6.1)` | 补 `package.publisher_ref`，并在 `publishers[]` 声明该发布者 |
+| `lint E: publisher_ref '…' does not resolve to any publishers[] entry` | `publisher_ref` 必须等于 `publishers[]` 中某项的 `id` |
+| `lint W: declared byte_size/sha256 … is stale; build refreshes it` | 手填的摘要与实物不符。可忽略（build 会按实际文件填写），或删掉手填值保持源 manifest 可编辑 |
+| `lint E: asset … is 128x128 but declared 64x64` | PNG 实际像素与声明不符。改 `properties` 或换图 |
+| `lint W: asset … has no transparency; it will draw as an opaque rectangle` | 主体 PNG 缺少真实 Alpha 透明背景（角色缩略图豁免此检查） |
+| `lint E: character '…' has no core.idle binding` | 每个角色必须绑定 `core.idle`，运行时不会为它另找回退 |
+| `lint E: character '…' base_anchor is outside the logical canvas`（含 bounds/reference_height） | geometry 锚点或边界超出逻辑画布，修正 `geometry` 数值 |
+| `lint E: action … has 320 frames (max 300)` / `has a 16ms frame (min 33ms)` | 超出动作预算：帧数 ≤300，单帧时长 ≥33 ms（可见帧率 ≤30 FPS） |
+| `lint E: estimated decoded working set … exceeds the 48 MiB runtime budget` | 全包解码像素超预算。缩小画布或删帧 |
+| `error: undeclared files present in the source tree …`（build，退出码 2） | 与 lint 同因；build 不允许静默丢文件 |
+| `error: refusing to overwrite frozen official release media` | 输出路径命中 `assets/petpack/` 冻结输出。换一个输出文件名 |
+| `refusing to overwrite existing template files`（init，退出码 1） | 目标目录已有模板文件。换目录或清理后重试 |
+| `validate` 输出 `result REJECT` + 诊断行 | 看 `code [phase] message_key`，对照[PetPack 规范](PETPACK_SPEC_1_0.md)；修复源树后重新 build |
+| `preflight REJECT: …` | 与 GUI 导入同一门禁：PNG 不可解码、声明尺寸不符、主体无 Alpha 或 idle 首帧不可绘制都会在此拒绝 |
+| `preview REJECT: pack did not validate` | 先跑 `validate` 修完再预览 |
+| `preview REJECT: no installed font renders the contact-sheet caption glyphs …` | 环境里没有任何字体能覆盖接触图标签所需字形（离屏平台连系统字体都没加载时也可能出现，工具已尝试加载标准系统字体目录）。装一个含拉丁字形的常规字体后重试；工具不会在缺字体时写出不可读的接触图 |
+| `preview` 某行标注 `(+N omitted)` / `(N frame(s) not sampled)` | 该动作帧数超过 18 列采样上限，做了有界抽样：首帧、末帧和接缝一定保留，中间省略 N 帧；需要逐帧查看就拆分动作或提高 `MAX_PREVIEW_COLUMNS` |
+| 安装时提示同版本内容冲突 | 同一 publisher/package/version 的不同内容不允许覆盖安装；提升 `package.version` 后重新构建 |
 
 ## 当前半写实退休猫有哪些资产
 

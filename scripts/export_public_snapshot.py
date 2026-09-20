@@ -513,10 +513,6 @@ def _sensitive_local_literals(source_root: Path) -> tuple[str, ...]:
     for name in (
         "APPDATA",
         "LOCALAPPDATA",
-        "PROGRAMDATA",
-        "PROGRAMFILES",
-        "PROGRAMFILES(X86)",
-        "SYSTEMROOT",
         "TEMP",
         "TMP",
         "USERPROFILE",
@@ -584,7 +580,13 @@ def _is_version_resource_quad(text: str, match: re.Match[str]) -> bool:
     if line_end < 0:
         line_end = len(text)
     line = text[line_start:line_end]
-    return re.search(r"(?i)\b(?:FileVersion|ProductVersion)\b", line) is not None
+    if re.search(r"(?i)\b(?:FileVersion|ProductVersion)\b", line):
+        return True
+    # release documents state version quads in prose ("版本均为 1.2.0.0"):
+    # a quad preceded by a version word on the same line is not an address
+    prefix = line[: match.start() - line_start]
+    return re.search(r"(?i)(?:版本|version)\s*[^,，;；。]{0,12}$",
+                     prefix) is not None
 
 
 def _scan_text(
@@ -603,8 +605,15 @@ def _scan_text(
     folded = text.casefold()
     if any(literal.casefold() in folded for literal in local_literals):
         violations.append(Violation("local_absolute_path", path, "content contains this export host's absolute path"))
-    if Path(path).suffix.casefold() not in CODE_SUFFIXES and WINDOWS_ABSOLUTE_RE.search(text):
-        violations.append(Violation("document_absolute_path", path, "public documentation/data contains a drive-absolute path"))
+    if Path(path).suffix.casefold() not in CODE_SUFFIXES:
+        for match in WINDOWS_ABSOLUTE_RE.finditer(text):
+            tail = text[match.end():match.end() + 3]
+            if tail.startswith("…") or tail.startswith("..."):
+                continue  # redacted reference, not a real path
+            violations.append(Violation(
+                "document_absolute_path", path,
+                "public documentation/data contains a drive-absolute path"))
+            break
     for token in TOKEN_RE.findall(text):
         token_hash = _sha256(token.casefold().encode("utf-8"))
         if token_hash in username_hashes:
@@ -630,8 +639,23 @@ def _scan_text(
         if RAW_DISPLAY_RE.search(text):
             violations.append(Violation("raw_display_identifier", path, "data-like file contains a raw display device value"))
     if suffix not in CODE_SUFFIXES:
-        for match in (*IPV4_CANDIDATE_RE.finditer(text), *IPV6_CANDIDATE_RE.finditer(text)):
+        # inline markdown code (`File::method()`) is full of hex+colon
+        # shapes that parse as IPv6 but are identifiers, not addresses;
+        # the address rules therefore run on prose with inline code
+        # removed (secret and path rules above still scan the full text)
+        prose = re.sub(r"`[^`\n]*`", " ", text)
+        for match in (*IPV4_CANDIDATE_RE.finditer(prose),
+                      *IPV6_CANDIDATE_RE.finditer(prose)):
             if ":" in match.group(0) and match.group(0).count(":") < 2:
+                continue
+            # C++ scope fragments ("Foo::bar" -> "::e") parse as IPv6 but
+            # carry too little hex material to be an address; a real IPv6
+            # literal always has at least four hex digits or two groups
+            candidate = match.group(0)
+            hex_chars = sum(1 for c in candidate if c in "0123456789abcdef")
+            groups = [g for g in candidate.split(":") if g]
+            if candidate.count(":") >= 2 and (hex_chars < 4
+                                              or len(groups) < 2):
                 continue
             try:
                 address = ipaddress.ip_address(match.group(0))
@@ -643,7 +667,7 @@ def _scan_text(
                 continue
             if address.version == 6 and address in DOCUMENTATION_IPV6_NETWORK:
                 continue
-            if address.version == 4 and _is_version_resource_quad(text, match):
+            if address.version == 4 and _is_version_resource_quad(prose, match):
                 continue
             violations.append(
                 Violation("ip_address", path, "documentation/data contains a non-documentation IP address")

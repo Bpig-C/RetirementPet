@@ -137,9 +137,29 @@ def percentile(values: list[float], pct: float) -> float:
     return ordered[index]
 
 
-def summarize(samples: list[dict[str, Any]], interval_s: float) -> dict[str, Any]:
+def summarize(samples: list[dict[str, Any]], interval_s: float,
+              bound_pid: int | None = None) -> dict[str, Any]:
     if not samples:
         raise HarnessError("cannot summarize an empty sample set")
+    # fail closed on hostile or corrupted samples (V12-08): a negative
+    # CPU delta, a non-finite value or a sample from another process
+    # must abort the aggregation, never silently blend in
+    for sample in samples:
+        cpu_value = sample.get("cpu_percent")
+        if (not isinstance(cpu_value, (int, float))
+                or isinstance(cpu_value, bool)
+                or not math.isfinite(cpu_value)
+                or cpu_value < 0):
+            raise HarnessError(
+                f"invalid cpu_percent in sample: {cpu_value!r}")
+        private = sample.get("private_bytes")
+        if (not isinstance(private, int) or isinstance(private, bool)
+                or private < 0):
+            raise HarnessError(
+                f"invalid private_bytes in sample: {private!r}")
+        if bound_pid is not None and sample.get("app_pid") != bound_pid:
+            raise HarnessError(
+                f"sample from foreign app_pid {sample.get('app_pid')!r}")
     cpu = [float(sample["cpu_percent"]) for sample in samples]
     memory = [int(sample["private_bytes"]) for sample in samples]
     window_size = max(1, int(round(ROLLING_WINDOW_S / interval_s)))
@@ -324,6 +344,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--receipt", type=Path)
     parser.add_argument("--evidence-root", type=Path, required=True)
+    parser.add_argument("--data-dir", type=Path,
+                        help="reuse a prepared data dir (e.g. with a "
+                             "pre-activated static pack) instead of a "
+                             "fresh temp dir; its contents are kept")
     return parser.parse_args(argv)
 
 
@@ -342,7 +366,17 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = args.evidence_root.resolve() / (
         f"{stamp}-{evidence_class.lower()}-{uuid4().hex[:8]}")
     run_dir.mkdir(parents=True, exist_ok=False)
-    data_dir = run_dir / "data"
+    if args.data_dir is not None:
+        data_dir = args.data_dir.resolve()
+        data_dir.mkdir(parents=True, exist_ok=True)
+        # a reused data dir still holds markers from earlier runs; the
+        # exactly-once marker validation is per-run, so archive them
+        prior = data_dir / "logs" / "perf_markers.jsonl"
+        if prior.is_file():
+            prior.rename(data_dir / "logs" / f"perf_markers.{stamp}-"
+                         f"{uuid4().hex[:6]}.jsonl")
+    else:
+        data_dir = run_dir / "data"
     window_report = run_dir / "window.json"
     instance = f"perf-{uuid4().hex}"
 
@@ -393,6 +427,19 @@ def main(argv: list[str] | None = None) -> int:
         measure_scene(
             metrics, proc, scene="visible_idle", phase="measure",
             duration_s=scene_s, interval_s=interval_s, samples=samples)
+
+        # V12-08: panel-open state (countdown panel visible and updating
+        # while the pet body stays composed)
+        target.ipc("panel", instance)
+        time.sleep(2.0)
+        measure_scene(
+            metrics, proc, scene="panel_open", phase="warmup",
+            duration_s=warmup_s, interval_s=interval_s, samples=samples)
+        measure_scene(
+            metrics, proc, scene="panel_open", phase="measure",
+            duration_s=scene_s, interval_s=interval_s, samples=samples)
+        target.ipc("panel-close", instance)
+        time.sleep(2.0)
 
         target.ipc("hide", instance)
         wait_for_window_visibility(proc, app_hwnd, False)
@@ -462,7 +509,7 @@ def main(argv: list[str] | None = None) -> int:
         support = []
         run_failures.append(f"supporting evidence inventory failed: {exc}")
 
-    scenes = ("visible_idle", "hidden")
+    scenes = ("visible_idle", "panel_open", "hidden")
     failures = evaluate_perf(
         samples=samples, scenes=scenes, scene_s=scene_s,
         interval_s=interval_s, markers_ok=markers_ok,
@@ -475,7 +522,9 @@ def main(argv: list[str] | None = None) -> int:
             sample for sample in samples
             if sample["scene"] == scene and sample["phase"] == "measure"
         ]
-        summaries[scene] = summarize(measured, interval_s) if measured else None
+        summaries[scene] = summarize(
+            measured, interval_s,
+            bound_pid=app_pid) if measured else None
     first_paint = next(
         (marker for marker in markers
          if marker["marker"] == "first_pet_paint"), None)
@@ -520,6 +569,7 @@ def main(argv: list[str] | None = None) -> int:
         "sample_evidence": sample_evidence,
         "supporting_evidence": support,
         "evidence_complete": True,
+        "provisional": True,
         "failures": failures,
         "result": "PASS" if not failures else "FAIL",
     }

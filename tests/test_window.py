@@ -184,7 +184,7 @@ def test_paint_order_is_body_overlay_countdown_exactly_once(
             calls.append("overlay")
 
     class Panel:
-        def render_expanded(self, _painter, _rect, _snapshot):
+        def render_expanded(self, _painter, _rect, _snapshot, heading=None):
             calls.append("countdown")
 
     class Painter:

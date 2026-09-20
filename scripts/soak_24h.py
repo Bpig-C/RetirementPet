@@ -21,6 +21,7 @@ import ctypes.wintypes as wt
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -166,9 +167,23 @@ def supporting_evidence(run_dir: Path, data_dir: Path) -> list[dict[str, Any]]:
     paths.extend(Path(run_dir).glob("runtime-attestation-v2.json"))
     paths.extend(Path(run_dir).glob("bound-release-receipt.json"))
     records = []
+    run_dir_resolved = Path(run_dir).resolve()
+    archive_root = run_dir_resolved / "prepared-data"
     for path in sorted(set(path for path in paths if path.is_file())):
+        resolved = path.resolve()
+        try:
+            relative = resolved.relative_to(run_dir_resolved).as_posix()
+        except ValueError:
+            # a prepared data dir may live outside the run dir (V12-08
+            # --data-dir): COPY it into the evidence so the recorded
+            # hash is always backed by an archived file
+            target = archive_root / resolved.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists():
+                shutil.copyfile(resolved, target)
+            relative = target.relative_to(run_dir_resolved).as_posix()
         records.append({
-            "path": path.relative_to(run_dir).as_posix(),
+            "path": relative,
             "sha256": _sha256(path),
             "bytes": path.stat().st_size,
         })
@@ -517,6 +532,14 @@ def wait_for_window_visibility(
     raise HarnessError(f"window did not become {state} after IPC")
 
 
+def _allowed_runtime_images(expected_image: Path) -> set[str]:
+    allowed = {str(expected_image).casefold()}
+    base = getattr(sys, "_base_executable", None)
+    if base:
+        allowed.add(str(Path(base).resolve()).casefold())
+    return allowed
+
+
 class VerifiedProcess:
     """Persistent, image-verified handle for the self-reported app process."""
 
@@ -538,8 +561,8 @@ class VerifiedProcess:
                     self._handle, 0, buffer, ctypes.byref(size)):
                 raise HarnessError("could not query app process image")
             observed = Path(buffer.value).resolve()
-            expected = Path(expected_image).resolve()
-            if str(observed).casefold() != str(expected).casefold():
+            allowed = _allowed_runtime_images(Path(expected_image).resolve())
+            if str(observed).casefold() not in allowed:
                 raise HarnessError(
                     f"self-reported PID image mismatch: {observed}")
             creation, exit_t, kernel, user = (

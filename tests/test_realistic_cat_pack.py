@@ -53,7 +53,9 @@ def test_realistic_preview_release_identity_is_frozen():
     report = validate_petpack(data, trust_channel="LOCAL_IMPORTED")
 
     assert report.accepted
-    assert report.degraded == []
+    # CR-P01: the historical preview misses spec-6.1 publisher_ref and is
+    # loadable only through the exact-revision legacy exemption.
+    assert report.degraded == ["publisher_ref_exempt:historical"]
     assert hashlib.sha256(data).hexdigest() == ARCHIVE_SHA256
     assert report.content_digest == CONTENT_DIGEST
     archive, manifest = load_pack(data)
@@ -75,8 +77,11 @@ def test_public_snapshot_excludes_only_the_frozen_legacy_preview():
     config = json.loads(
         (ROOT / "config" / "public_snapshot.json").read_text(encoding="utf-8")
     )
+    # the Luo Xiaohei local-channel builder joined the frozen legacy
+    # preview in the exclusion list (CR13-04 user ruling)
     assert config["additional_exclude_paths"] == [
-        "assets/petpack/examples/realistic-retirement-cat-0.1.0.petpack"
+        "assets/petpack/examples/realistic-retirement-cat-0.1.0.petpack",
+        "scripts/build_xiaohei_local.py",
     ]
     assert "assets/petpack/examples/realistic-retirement-cat-0.1.1.petpack" \
         not in config["additional_exclude_paths"]
@@ -143,6 +148,11 @@ def test_realistic_preview_preflight_and_runtime_fallback(qt_application):
 
 
 def test_realistic_preview_build_is_deterministic(tmp_path):
+    """Rebuilds are byte-identical to each other and preserve the frozen
+    Revision identity.  The frozen 0.1.1 archive itself is never rebuilt:
+    the V12-03 builder fix (members actually DEFLATE-compressed instead of
+    silently STORED) changes container bytes - and therefore the archive
+    hash - while the content digest, which pins the Revision, is unchanged."""
     cli = _load_cli_module()
     first = tmp_path / "first.petpack"
     second = tmp_path / "second.petpack"
@@ -150,7 +160,12 @@ def test_realistic_preview_build_is_deterministic(tmp_path):
     cli.build(SOURCE, first)
     cli.build(SOURCE, second)
 
-    assert first.read_bytes() == second.read_bytes() == PACK.read_bytes()
+    assert first.read_bytes() == second.read_bytes()
+    rebuilt = validate_petpack(first.read_bytes())
+    frozen = validate_petpack(PACK.read_bytes())
+    assert rebuilt.accepted and frozen.accepted
+    assert rebuilt.content_digest == frozen.content_digest == CONTENT_DIGEST
+    assert first.read_bytes() != PACK.read_bytes()
 
 
 def test_local_import_rejects_oversized_source_before_materializing_it(tmp_path):

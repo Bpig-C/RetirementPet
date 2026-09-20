@@ -13,6 +13,7 @@ RetirementPet 自身原创源代码和文档采用 [MIT License](LICENSE)。运�
 | PySide6 / Shiboken6 | 6.8.3 | [Qt for Python licensing](https://doc.qt.io/qtforpython-6/licenses.html) | Python Qt 绑定 |
 | Qt | 6.8.3（随 PySide6 wheel） | [Qt licensing](https://www.qt.io/licensing/open-source-lgpl-obligations) | 窗口、绘制、音频和平台集成 |
 | PyInstaller | 6.x | [PyInstaller license](https://pyinstaller.org/en/stable/license.html) | Windows onedir 打包 |
+| winrt-runtime 及投影包 | 3.2.1 | [pywin32-family license (Apache-2.0)](https://pypi.org/project/winrt-runtime/) | Windows 系统媒体会话（V13-05，可选功能） |
 | pytest | 开发依赖 | [pytest license](https://github.com/pytest-dev/pytest/blob/main/LICENSE) | 自动化测试，不应进入运行包 |
 
 PySide6 和 Qt 的开源发行涉及 LGPLv3/GPLv3 以及各模块自己的第三方许可。项目选择

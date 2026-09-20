@@ -31,20 +31,30 @@ REQUEST_TTL_S = 5.0
 
 ChangeCallback = Callable[["ActionChangeEvent"], None]
 
+#: A global veto consulted by EVERY request path (V12-06 CR-C06).  Returns
+#: False to reject the request regardless of source or force.  This is how
+#: app-level policy (a semantic set to "disabled") reaches the engine
+#: without the engine reading settings.
+RequestGate = Callable[[ActionId, str, bool], bool]
+
 
 class ActionChangeEvent:
     """Fired on every main-action transition (start, replace, end)."""
 
-    __slots__ = ("previous", "current", "reason")
+    __slots__ = ("previous", "current", "reason", "source")
 
     def __init__(
         self,
         previous: ActionRuntime | None,
         current: ActionRuntime | None,
         reason: str,
+        source: str | None = None,
     ):
         self.previous = previous
         self.current = current
+        # provenance of the request ("panel", "random", "resolve:...", ...);
+        # None when the transition had no originating request (e.g. an end)
+        self.source = source
         self.reason = reason  # "request" | "force" | "natural_end" | "invalidated"
 
     @property
@@ -67,6 +77,7 @@ class ActionController:
         self._current: ActionRuntime | None = None
         self._listeners: list[ChangeCallback] = []
         self._cooldown_until: dict[ActionId, int] = {}
+        self._request_gate: RequestGate | None = None
 
     # -- observation --------------------------------------------------------
 
@@ -82,8 +93,9 @@ class ActionController:
 
         return _unsubscribe
 
-    def _emit(self, previous, current, reason: str) -> None:
-        event = ActionChangeEvent(previous, current, reason)
+    def _emit(self, previous, current, reason: str,
+              source: str | None = None) -> None:
+        event = ActionChangeEvent(previous, current, reason, source)
         for callback in list(self._listeners):
             try:
                 callback(event)
@@ -93,6 +105,17 @@ class ActionController:
     @property
     def current(self) -> ActionRuntime | None:
         return self._current
+
+    def set_request_gate(self, gate: RequestGate | None) -> None:
+        """Install (or clear with None) the global request veto."""
+        self._request_gate = gate
+
+    def has_action(self, action_id: ActionId) -> bool:
+        """Public registry lookup for UI-level gating (V12-06)."""
+        return self._registry.has(action_id)
+
+    def spec_of(self, action_id: ActionId) -> ActionSpec:
+        return self._registry.get(action_id)
 
     def current_action(self) -> ActionId | None:
         return self._current.spec.action_id if self._current else None
@@ -119,6 +142,8 @@ class ActionController:
         if not self._registry.has(action_id):
             logger.warning("unknown action requested: %s", action_id)
             return False
+        if self._request_gate is not None                 and not self._request_gate(action_id, source, force):
+            return False
 
         now = self._clock.now()
         stamp = requested_at or now
@@ -139,7 +164,8 @@ class ActionController:
 
         runtime = self._activate(spec, payload)
         self._current = runtime
-        self._emit(current, runtime, "force" if force else "request")
+        self._emit(current, runtime, "force" if force else "request",
+                   source=source)
         logger.info(
             "action %s -> %s (source=%s, force=%s)",
             current.spec.action_id.value if current else "none",
@@ -152,8 +178,20 @@ class ActionController:
     def _activate(self, spec: ActionSpec, payload: dict | None) -> ActionRuntime:
         now_ms = self._clock.monotonic_ms()
         duration: int | None
+        # V12-06 loop control: an explicit loop=False payload plays a
+        # loop-capable (unbounded) action once.  The caller measures the
+        # ACTIVE material and supplies its full-pass duration
+        # (single_pass_ms, C06-R2); without a measured material this
+        # stays the honest minimum-duration fallback.
         if spec.max_duration_ms is None:
-            duration = None
+            if payload and payload.get("loop") is False:
+                material_ms = payload.get("single_pass_ms")
+                if isinstance(material_ms, int) and material_ms > 0:
+                    duration = material_ms
+                else:
+                    duration = max(1, spec.min_duration_ms)
+            else:
+                duration = None
         elif spec.max_duration_ms <= spec.min_duration_ms:
             duration = spec.max_duration_ms
         else:

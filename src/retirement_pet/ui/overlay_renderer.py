@@ -122,11 +122,64 @@ def _plain_bubble_text(text: str) -> tuple[str, QFont]:
     return safe, fallback
 
 
+def _bubble_geometry(rect: QRectF, snap: RenderSnapshot,
+                     bubble_origin: QPointF | None = None):
+    """Shared bubble geometry: tail tip, tail base y, box and text layout.
+
+    With ``bubble_origin`` (window DIP, from the character layout) the tail
+    tip sits just above the anchor, clamped into the viewport; without it
+    the position matches the legacy canvas-mapped bubble exactly.
+    """
+    text, font = _plain_bubble_text(snap.overlay.bubble_text)
+    metrics = QFontMetrics(font)
+    lines = text.split("\n")
+    line_height = metrics.height()
+    width = min(max(metrics.horizontalAdvance(line) for line in lines) + 22,
+                max(24.0, rect.width() - 4.0))
+    height = line_height * len(lines) + 12
+    scale = min(rect.width(), rect.height()) / CANVAS
+    if bubble_origin is None:
+        tail_tip = QPointF(
+            rect.center().x() + (126.0 - CANVAS / 2.0) * scale,
+            rect.center().y() + (44.0 - CANVAS / 2.0) * scale)
+    else:
+        tail_tip = QPointF(
+            max(rect.left() + width / 2.0 + 2.0,
+                min(rect.right() - width / 2.0 - 2.0, bubble_origin.x())),
+            max(rect.top() + height + 2.0, bubble_origin.y() - 4.0))
+    tail_base_y = tail_tip.y() - 10.0
+    box = QRectF(tail_tip.x() - width / 2.0, tail_base_y - height,
+                 width, height)
+    if box.left() < rect.left() + 2.0:
+        box.moveLeft(rect.left() + 2.0)
+    elif box.right() > rect.right() - 2.0:
+        box.moveRight(rect.right() - 2.0)
+    if box.top() < rect.top() + 2.0:
+        box.moveTop(rect.top() + 2.0)
+    return tail_tip, tail_base_y, box, width, height, lines, line_height
+
+
 class EngineOverlayRenderer:
     """Paint the engine layer once, after a body and before the countdown."""
 
+    def __init__(self) -> None:
+        # V12-06 visibility policy gate: full | reduced | hidden
+        self._decorations = "full"
+
+    def set_decorations(self, mode: str) -> None:
+        self._decorations = mode \
+            if mode in ("full", "reduced", "hidden") else "full"
+
     def render(self, painter: QPainter, rect: QRectF,
-               snap: RenderSnapshot) -> None:
+               snap: RenderSnapshot,
+               bubble_origin: QPointF | None = None) -> None:
+        """``bubble_origin`` places the bubble tail tip in window DIP.
+
+        It comes from the shared character layout (manifest
+        ``bubble_anchor``); None keeps the legacy canvas-mapped position.
+        The bubble is painted outside the character canvas transform so a
+        geometry-placed anchor is exact, not rescaled through the canvas.
+        """
         painter.save()
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -136,15 +189,51 @@ class EngineOverlayRenderer:
             painter.translate(-CANVAS / 2, -CANVAS / 2)
             self._draw_effects(painter, snap)
             self._draw_caption(painter, snap)
-            self._draw_bubble(painter, snap)
         finally:
             painter.restore()
+        if snap.overlay.bubble_text:
+            painter.save()
+            try:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                self._draw_bubble(painter, rect, snap, bubble_origin)
+            finally:
+                painter.restore()
 
     @staticmethod
-    def _draw_effects(painter: QPainter, snap: RenderSnapshot) -> None:
+    def bubble_rect(rect: QRectF, snap: RenderSnapshot,
+                    bubble_origin: QPointF | None = None) -> QRectF | None:
+        """Bounding rect (box + tail) the bubble will occupy, for masks."""
+        if not snap.overlay.bubble_text:
+            return None
+        tail_tip, tail_base_y, box, _width, _height, _lines, _lh = \
+            _bubble_geometry(rect, snap, bubble_origin)
+        tail_bounds = QRectF(
+            QPointF(tail_tip.x() - 6, tail_base_y),
+            QPointF(tail_tip.x() + 6, tail_tip.y()))
+        return box.united(tail_bounds)
+
+    @staticmethod
+    def effects_rect(rect: QRectF) -> QRectF:
+        """Viewport area where transient effect decorations may draw."""
+        scale = min(rect.width(), rect.height()) / CANVAS
+        offset = QPointF(rect.center().x() - CANVAS * scale / 2.0,
+                         rect.center().y() - CANVAS * scale / 2.0)
+        canvas_area = QRectF(50, 80, 165, 90)
+        return QRectF(canvas_area.x() * scale + offset.x(),
+                      canvas_area.y() * scale + offset.y(),
+                      canvas_area.width() * scale,
+                      canvas_area.height() * scale)
+
+    def _draw_effects(self, painter: QPainter, snap: RenderSnapshot) -> None:
+        if self._decorations == "hidden":
+            return
+        # reduced: at most one decoration kind stays visible
+        effects = snap.overlay.effects \
+            if self._decorations != "reduced" \
+            else snap.overlay.effects[:1]
         t = snap.time_ms / 1000.0
         painter.setPen(Qt.PenStyle.NoPen)
-        for kind in snap.overlay.effects:
+        for kind in effects:
             if kind == "zzz":
                 for index in range(3):
                     drift = (t * 14 + index * 10) % 30
@@ -205,21 +294,17 @@ class EngineOverlayRenderer:
         painter.setPen(Qt.PenStyle.NoPen)
 
     @staticmethod
-    def _draw_bubble(painter: QPainter, snap: RenderSnapshot) -> None:
+    def _draw_bubble(painter: QPainter, rect: QRectF, snap: RenderSnapshot,
+                     bubble_origin: QPointF | None = None) -> None:
         if not snap.overlay.bubble_text:
             return
-        text, font = _plain_bubble_text(snap.overlay.bubble_text)
-        painter.setFont(font)
-        metrics = painter.fontMetrics()
-        lines = text.split("\n")
-        line_height = metrics.height()
-        width = max(metrics.horizontalAdvance(line) for line in lines) + 22
-        height = line_height * len(lines) + 12
-        box = QRectF(128 - width / 2, 34 - height, width, height)
+        (_tail_tip, tail_base_y, box,
+         width, _height, lines, line_height) = _bubble_geometry(
+            rect, snap, bubble_origin)
         tail = QPolygonF([
-            QPointF(120, box.bottom()),
-            QPointF(132, box.bottom()),
-            QPointF(126, box.bottom() + 10),
+            QPointF(_tail_tip.x() - 6, tail_base_y),
+            QPointF(_tail_tip.x() + 6, tail_base_y),
+            _tail_tip,
         ])
         painter.setPen(QPen(QColor(210, 212, 218), 1))
         painter.setBrush(QColor(250, 250, 252, 244))

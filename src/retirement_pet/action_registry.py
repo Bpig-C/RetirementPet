@@ -135,6 +135,14 @@ DEFAULT_SPECS: dict[ActionId, ActionSpec] = {
     ),
 }
 
+#: Engine-frozen discipline for manually requested actions (DESIGN_V2 6.2;
+#: V12-06 actions page).  During a meeting only muted meeting-safe requests
+#: pass; under do-not-disturb only dnd-safe actions pass.  The UI must gate
+#: on these BEFORE calling the controller - force requests bypass priority
+#: and would otherwise bypass discipline too.
+MEETING_SAFE_SEMANTICS = frozenset({"music"})
+DND_SAFE_SEMANTICS = frozenset({"music", "rest"})
+
 
 class ActionRegistry:
     def __init__(self, specs: dict[ActionId, ActionSpec] | None = None):

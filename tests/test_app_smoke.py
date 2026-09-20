@@ -562,7 +562,7 @@ def test_builtin_official_cat_registered_on_startup(app, qt_application):
     builtins = app.library.builtin_revisions()
     assert builtins, "embedded official pack must be READY after startup"
     assert {record.revision_key.package_version for record in builtins} == {
-        "1.0.0", "1.0.1",
+        "1.0.0", "1.0.2",
     }
     assert all(
         record.revision_key.pack.package_id == "retirement-cat-official"
@@ -570,7 +570,7 @@ def test_builtin_official_cat_registered_on_startup(app, qt_application):
         for record in builtins
     )
     active = app._selection_store.get("active")
-    assert active is not None and active.package_version == "1.0.1"
+    assert active is not None and active.package_version == "1.0.2"
 
 
 def _activate_exact_legacy_builtin(pet):
@@ -601,11 +601,11 @@ def test_exact_legacy_builtin_migrates_atomically_and_restart_is_idempotent(
 
     migrated = PetApplication(
         argv=["retirement-pet"], data_dir=data_dir, clock=FakeClock(),
-        headless=True, instance_name=f"pytest-v101-migrate-{tmp_path.name}",
+        headless=True, instance_name=f"pytest-v102-migrate-{tmp_path.name}",
     )
     try:
         active = migrated._selection_store.get("active")
-        assert active.package_version == "1.0.1"
+        assert active.package_version == "1.0.2"
         assert active.content_digest != old_active.content_digest
         assert active.generation > old_active.generation
         assert active.commit_sequence > old_active.commit_sequence
@@ -618,14 +618,14 @@ def test_exact_legacy_builtin_migrates_atomically_and_restart_is_idempotent(
             if entry.package_id == "retirement-cat-official"
         ]
         assert [entry.package_version for entry in visible_official] == [
-            "1.0.1"]
+            "1.0.2"]
     finally:
         migrated.shutdown()
 
     restarted = PetApplication(
         argv=["retirement-pet"], data_dir=data_dir, clock=FakeClock(),
         headless=True,
-        instance_name=f"pytest-v101-idempotent-{tmp_path.name}",
+        instance_name=f"pytest-v102-idempotent-{tmp_path.name}",
     )
     try:
         assert restarted._selection_store.get("active") == active
@@ -646,13 +646,13 @@ def test_legacy_migration_prepare_failure_keeps_old_renderer_active_and_lkg(
 
     real_prepare = RuntimeSwitcher.prepare
 
-    def fail_only_v101(self, request, *, authority_recovery=False):
-        if request.revision_key.package_version == "1.0.1":
+    def fail_only_current(self, request, *, authority_recovery=False):
+        if request.revision_key.package_version == "1.0.2":
             return None
         return real_prepare(
             self, request, authority_recovery=authority_recovery)
 
-    monkeypatch.setattr(RuntimeSwitcher, "prepare", fail_only_v101)
+    monkeypatch.setattr(RuntimeSwitcher, "prepare", fail_only_current)
     reborn = PetApplication(
         argv=["retirement-pet"], data_dir=data_dir, clock=FakeClock(),
         headless=True,
@@ -1037,3 +1037,49 @@ def test_shutdown_detaches_window_owned_timers_and_delayed_startup(
     pet.window.hide()
     pet._startup_timer.timeout.emit()
     assert not pet.window.isVisible()
+
+
+def test_reselecting_pending_revision_cancels_deletion_across_restart(
+        pack_app, qt_application, tmp_path):
+    """L07-01, master's case A: a pending-delete revision that is later
+    activated must not be destroyed by the restart-resumed deletion."""
+    record = pack_app.library.install(
+        Path(__file__).resolve().parent.parent
+        / "tests/fixtures/petpack/minimal-static.petpack")
+    handle = open(record.pack_path, "rb")
+    try:
+        outcome = pack_app.library.request_uninstall(
+            record.revision_key,
+            active_guard=pack_app._protected_selection_guard())
+        assert outcome == "pending_delete"
+    finally:
+        handle.close()
+
+    # explicit reselection withdraws the scheduled deletion
+    entry = next(e for e in pack_app.catalog.entries()
+                 if e.character_id == "demo")
+    assert pack_app._switch_character(entry) is True
+    assert pack_app.library.pending_delete_keys() == []
+    assert pack_app.library.get_revision(record.revision_key) is not None
+
+    # promote it to the restore basis, then really restart the app
+    assert pack_app.switcher.checkpoint_active_health() is True
+    active_before = pack_app._selection_store.get("active")
+    data_dir = pack_app._data_dir
+    pack_app.shutdown()
+
+    from retirement_pet.app import PetApplication
+    from retirement_pet.clock import FakeClock
+
+    reborn = PetApplication(
+        argv=["retirement-pet"], data_dir=data_dir, clock=FakeClock(),
+        headless=True,
+        instance_name=f"pytest-pending-{tmp_path.name}",
+    )
+    try:
+        assert reborn._selection_store.get("active") == active_before
+        assert reborn.library.get_revision(record.revision_key) is not None
+        assert record.pack_path.is_file()
+        assert reborn.library.pending_delete_keys() == []
+    finally:
+        reborn.shutdown()

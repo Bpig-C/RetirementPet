@@ -14,6 +14,7 @@
 | `retirement-cat-official-1.0.1.petpack` | `BUILTIN_OFFICIAL` | 当前官方安全退休猫 |
 | `retirement-cat-official.petpack` | `BUILTIN_OFFICIAL` | 冻结的旧官方 Revision，用于精确迁移与恢复 |
 | `examples/realistic-retirement-cat-0.1.1.petpack` | `LOCAL_IMPORTED` | 随附半写实画风预览与作者参考 |
+| `realistic-kitten-0.1.1.petpack` | `LOCAL_IMPORTED` | 真实幼猫八场景包；修复 0.1.0 浅色毛发透明缺损 |
 
 半写实包虽然随 EXE 分发，仍按本地内容处理。它的发布者身份与权利自述不会因为
 文件位置而自动受信；首次一键入口也必须先做固定摘要和隔离预检。

@@ -10,7 +10,9 @@ switch.
 from retirement_pet.todo.domain import (
     FocusProjection,
     Horizon,
+    Level,
     Status,
+    SubtreeSummary,
     Task,
     TodoError,
 )
@@ -20,7 +22,9 @@ from retirement_pet.todo.service import TodoService
 __all__ = [
     "FocusProjection",
     "Horizon",
+    "Level",
     "Status",
+    "SubtreeSummary",
     "Task",
     "TodoError",
     "TaskRepository",

@@ -1,9 +1,12 @@
 {
   "schema_version": 1,
   "additional_exclude_paths": [
-    "assets/petpack/examples/realistic-retirement-cat-0.1.0.petpack"
+    "assets/petpack/examples/realistic-retirement-cat-0.1.0.petpack",
+    "scripts/build_xiaohei_local.py"
   ],
-  "additional_exclude_prefixes": [],
+  "additional_exclude_prefixes": [
+    "scripts/build_xiaohei_local.py"
+  ],
   "forbidden_username_sha256": [],
   "limits": {
     "max_archive_members": 4096,

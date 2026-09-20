@@ -14,11 +14,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 def isolate_pet_application_startup_registry(request, monkeypatch):
     """PetApplication tests must never read or write the user's real HKCU."""
     app_test_files = {
+        "test_agent_cli.py",
+        "test_agent_protocol.py",
         "test_app_smoke.py",
         "test_character_onboarding.py",
         "test_control_panel.py",
+        "test_media_bridge.py",
+        "test_v13_06_activity.py",
         "test_native_window.py",
         "test_todo.py",
+        "test_todo_subtree_semantics.py",
+        "test_todo_v13_04_ui.py",
+        "test_todo_v13_ui.py",
         "test_tray.py",
     }
     if request.node.path.name not in app_test_files:

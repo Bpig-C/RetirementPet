@@ -9,11 +9,19 @@
   "random_action_min_interval_s": 45,
   "random_action_max_interval_s": 120,
   "sound_enabled": true,
+  "activity_link_enabled": true,
+  "media_bridge_enabled": false,
   "volume": 0.35,
   "work_idle_threshold_s": 120,
   "rest_reminder_minutes": 50,
-  "meal_times": ["08:00", "12:00", "18:30"],
-  "exercise_times": ["16:00"],
+  "meal_times": [
+    "08:00",
+    "12:00",
+    "18:30"
+  ],
+  "exercise_times": [
+    "16:00"
+  ],
   "meeting_windows": [],
   "music_paths": [],
   "wheel_controls_volume": true,

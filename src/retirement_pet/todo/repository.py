@@ -1,10 +1,15 @@
 """Fail-closed SQLite repository for the user-global TodoModule store.
 
-Alpha accepts exactly two on-disk states: no SQLite family at all, or the
-exact v1 schema.  Every other state (including an empty SQLite file,
-corruption, foreign tables and newer schemas) is preserved and reported as
-unavailable.  A hot rollback journal is verified on an isolated copy before
-SQLite is allowed to recover the live store.
+The repository accepts exactly three on-disk states: no SQLite family at
+all (creates a fresh v2 store), the exact v1 schema (auto-migrates to v2
+after a verified pre-migration backup succeeds), or the exact v2 schema.
+Every other state (including an empty SQLite file, corruption, foreign
+tables and newer schemas) is preserved and reported as unavailable.  A hot
+rollback journal is verified on an isolated copy before SQLite is allowed
+to recover the live store.
+
+If the pre-migration backup cannot be produced, the store stays untouched
+and closed: backup failure must never lead to migrating an unbacked store.
 """
 
 from __future__ import annotations
@@ -22,7 +27,8 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from retirement_pet.todo import migrations
-from retirement_pet.todo.domain import Horizon, Status, Task, TodoError
+from retirement_pet.todo import backup as backup_module
+from retirement_pet.todo.domain import Horizon, Level, Status, Task, TodoError
 from retirement_pet.todo.errors import SchemaTooNew, TaskStoreUnavailable
 
 logger = logging.getLogger(__name__)
@@ -32,38 +38,72 @@ _KEEP_FOCUS = object()
 _COPY_CHUNK_BYTES = 1024 * 1024
 _ROLLBACK_JOURNAL_MAGIC = bytes.fromhex("d9d505f920a163d7")
 
-_EXPECTED_OBJECTS = {
-    ("table", "meta"),
-    ("table", "tasks"),
-    ("table", "focus"),
-    ("index", "idx_tasks_parent"),
-    ("index", "idx_tasks_status_horizon"),
-    ("index", "idx_tasks_due"),
+_OBJECTS_BY_VERSION = {
+    1: {
+        ("table", "meta"),
+        ("table", "tasks"),
+        ("table", "focus"),
+        ("index", "idx_tasks_parent"),
+        ("index", "idx_tasks_status_horizon"),
+        ("index", "idx_tasks_due"),
+    },
+    2: {
+        ("table", "meta"),
+        ("table", "tasks"),
+        ("table", "focus"),
+        ("index", "idx_tasks_parent"),
+        ("index", "idx_tasks_status_horizon"),
+        ("index", "idx_tasks_due"),
+        ("index", "idx_tasks_archived"),
+    },
 }
 
+_V1_TASK_COLUMNS = (
+    ("id", "TEXT", 0, None, 1, 0),
+    ("parent_id", "TEXT", 0, None, 0, 0),
+    ("title", "TEXT", 1, None, 0, 0),
+    ("horizon", "TEXT", 1, None, 0, 0),
+    ("status", "TEXT", 1, None, 0, 0),
+    ("sort_key", "INTEGER", 1, "0", 0, 0),
+    ("due_date", "TEXT", 0, None, 0, 0),
+    ("created_at", "TEXT", 1, None, 0, 0),
+    ("updated_at", "TEXT", 1, None, 0, 0),
+    ("completed_at", "TEXT", 0, None, 0, 0),
+)
+_V2_TASK_COLUMNS = _V1_TASK_COLUMNS + (
+    ("importance", "TEXT", 0, None, 0, 0),
+    ("urgency", "TEXT", 0, None, 0, 0),
+    ("archived", "INTEGER", 1, "0", 0, 0),
+    ("archived_at", "TEXT", 0, None, 0, 0),
+    ("note", "TEXT", 1, "''", 0, 0),
+)
+
 # name, declared type, not-null, default SQL, primary-key order, hidden
-_EXPECTED_COLUMNS = {
-    "meta": (
-        ("key", "TEXT", 0, None, 1, 0),
-        ("value", "TEXT", 1, None, 0, 0),
-    ),
-    "tasks": (
-        ("id", "TEXT", 0, None, 1, 0),
-        ("parent_id", "TEXT", 0, None, 0, 0),
-        ("title", "TEXT", 1, None, 0, 0),
-        ("horizon", "TEXT", 1, None, 0, 0),
-        ("status", "TEXT", 1, None, 0, 0),
-        ("sort_key", "INTEGER", 1, "0", 0, 0),
-        ("due_date", "TEXT", 0, None, 0, 0),
-        ("created_at", "TEXT", 1, None, 0, 0),
-        ("updated_at", "TEXT", 1, None, 0, 0),
-        ("completed_at", "TEXT", 0, None, 0, 0),
-    ),
-    "focus": (
-        ("id", "INTEGER", 0, None, 1, 0),
-        ("task_id", "TEXT", 1, None, 0, 0),
-        ("started_at", "TEXT", 1, None, 0, 0),
-    ),
+_EXPECTED_COLUMNS_BY_VERSION = {
+    1: {
+        "meta": (
+            ("key", "TEXT", 0, None, 1, 0),
+            ("value", "TEXT", 1, None, 0, 0),
+        ),
+        "tasks": _V1_TASK_COLUMNS,
+        "focus": (
+            ("id", "INTEGER", 0, None, 1, 0),
+            ("task_id", "TEXT", 1, None, 0, 0),
+            ("started_at", "TEXT", 1, None, 0, 0),
+        ),
+    },
+    2: {
+        "meta": (
+            ("key", "TEXT", 0, None, 1, 0),
+            ("value", "TEXT", 1, None, 0, 0),
+        ),
+        "tasks": _V2_TASK_COLUMNS,
+        "focus": (
+            ("id", "INTEGER", 0, None, 1, 0),
+            ("task_id", "TEXT", 1, None, 0, 0),
+            ("started_at", "TEXT", 1, None, 0, 0),
+        ),
+    },
 }
 
 _EXPECTED_FOREIGN_KEYS = {
@@ -72,13 +112,30 @@ _EXPECTED_FOREIGN_KEYS = {
     "focus": (("tasks", "task_id", "id", "NO ACTION", "NO ACTION", "NONE"),),
 }
 
-_EXPECTED_INDEXES = {
-    "idx_tasks_parent": (("parent_id", 0, "BINARY"),),
-    "idx_tasks_status_horizon": (
-        ("status", 0, "BINARY"),
-        ("horizon", 0, "BINARY"),
-    ),
-    "idx_tasks_due": (("due_date", 0, "BINARY"),),
+_INDEXES_BY_VERSION = {
+    1: {
+        "idx_tasks_parent": (("parent_id", 0, "BINARY"),),
+        "idx_tasks_status_horizon": (
+            ("status", 0, "BINARY"),
+            ("horizon", 0, "BINARY"),
+        ),
+        "idx_tasks_due": (("due_date", 0, "BINARY"),),
+    },
+    2: {
+        "idx_tasks_parent": (("parent_id", 0, "BINARY"),),
+        "idx_tasks_status_horizon": (
+            ("status", 0, "BINARY"),
+            ("horizon", 0, "BINARY"),
+        ),
+        "idx_tasks_due": (("due_date", 0, "BINARY"),),
+        "idx_tasks_archived": (("archived", 0, "BINARY"),),
+    },
+}
+
+# meta keys required per version, in sorted key order
+_META_KEYS_BY_VERSION = {
+    1: [("schema_version",)],
+    2: [("established_at",), ("schema_version",)],
 }
 
 
@@ -112,8 +169,13 @@ class TaskRepository:
     """Single-connection task store with strict preflight and live validation."""
 
     def __init__(self, db_path: Path, *,
-                 connection_factory: Callable[..., sqlite3.Connection] | None = None):
+                 connection_factory: Callable[..., sqlite3.Connection] | None = None,
+                 protected_backups: frozenset[Path] = frozenset()):
         self.path = Path(os.path.abspath(os.fspath(db_path)))
+        # Directories (e.g. an in-flight restore input) that the migration
+        # pre-backup's retention prune must never remove.
+        self._protected_backups = frozenset(
+            Path(os.path.abspath(os.fspath(p))) for p in protected_backups)
         self._db: sqlite3.Connection | None = None
         self._connect = connection_factory or sqlite3.connect
         self._open()
@@ -138,13 +200,16 @@ class TaskRepository:
             if kind == 0:
                 raise TaskStoreUnavailable(
                     "empty_store_unsupported", stage="preflight")
-            if kind != migrations.SCHEMA_VERSION:
+            if kind not in migrations.SUPPORTED_VERSIONS:
                 raise TaskStoreUnavailable(
                     "unsupported_schema", stage="preflight")
-            self._open_existing_v1(
+            self._open_existing(
                 expected,
+                kind,
                 recover_hot_journal=Path(f"{self.path}-journal") in expected,
             )
+            if kind == 1:
+                self._backup_and_migrate_live_v1()
         except (SchemaTooNew, TaskStoreUnavailable):
             raise
         except sqlite3.DatabaseError as exc:
@@ -152,6 +217,80 @@ class TaskRepository:
         except OSError as exc:
             raise TaskStoreUnavailable(
                 "filesystem_unavailable", stage="preflight") from exc
+
+    def _backup_and_migrate_live_v1(self) -> None:
+        """Back up the verified v1 store, then migrate it to v2 in place.
+
+        A failed backup leaves the store closed and untouched: this build
+        never migrates a store it could not first preserve.  A failed
+        migration rolls its transaction back, which always leaves the exact
+        pre-migration v1 bytes on disk.
+        """
+        try:
+            backup_module.create_backup(
+                self.path, "pre-migration", source_connection=self._db,
+                protected=self._protected_backups)
+        except backup_module.BackupError as exc:
+            self._close_failed(self._db)
+            self._db = None
+            raise TaskStoreUnavailable(
+                "backup_failed", stage="migrate") from exc
+        db = self._db
+        try:
+            db.execute("PRAGMA foreign_keys=OFF")
+            if db.execute("PRAGMA foreign_keys").fetchone()[0] != 0:
+                raise sqlite3.DatabaseError("foreign key controls unavailable")
+            db.execute("BEGIN IMMEDIATE")
+            if self._inspect_database(db) != 1:
+                raise TaskStoreUnavailable(
+                    "schema_changed_before_migration", stage="migrate")
+            migrations.migrate_v1_to_v2(db)
+            if self._inspect_database(db) != migrations.SCHEMA_VERSION:
+                raise TaskStoreUnavailable(
+                    "migrated_schema_invalid", stage="migrate")
+            if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise TaskStoreUnavailable(
+                    "migrated_foreign_keys", stage="migrate")
+            db.commit()
+            db.execute("PRAGMA foreign_keys=ON")
+            if db.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+                raise sqlite3.DatabaseError(
+                    "foreign key enforcement unavailable")
+            if self._inspect_database(
+                    db, full_integrity=True) != migrations.SCHEMA_VERSION:
+                raise TaskStoreUnavailable(
+                    "migrated_schema_invalid", stage="migrate")
+            logger.info("todo store migrated to schema %s",
+                        migrations.SCHEMA_VERSION)
+        except (SchemaTooNew, TaskStoreUnavailable):
+            self._abort_migration(db)
+            raise
+        except sqlite3.DatabaseError as exc:
+            self._abort_migration(db)
+            raise self._unavailable(exc, "migrate") from exc
+        except OSError as exc:
+            self._abort_migration(db)
+            raise TaskStoreUnavailable(
+                "migration_failed", stage="migrate") from exc
+        except Exception as exc:
+            # Any unexpected failure must still leave the exact pre-migration
+            # v1 store on disk with no locks held.
+            self._abort_migration(db)
+            raise TaskStoreUnavailable(
+                "migration_failed", stage="migrate") from exc
+
+    def _abort_migration(self, db: sqlite3.Connection) -> None:
+        try:
+            if db.in_transaction:
+                db.rollback()
+        except sqlite3.Error:
+            pass
+        try:
+            db.execute("PRAGMA foreign_keys=ON")
+        except sqlite3.Error:
+            pass
+        self._close_failed(db)
+        self._db = None
 
     @staticmethod
     def _unavailable(exc: BaseException,
@@ -440,6 +579,7 @@ class TaskRepository:
     @classmethod
     def _inspect_database(cls, db: sqlite3.Connection, *,
                           full_integrity: bool = False) -> int:
+        """Validate an open database and return its declared version."""
         object_rows = db.execute(
             "SELECT type, name FROM sqlite_master "
             "WHERE name NOT LIKE 'sqlite_%'").fetchall()
@@ -458,13 +598,27 @@ class TaskRepository:
         except (ValueError, TypeError) as exc:
             raise TaskStoreUnavailable(
                 "invalid_schema_version", stage="schema") from exc
-        if version != migrations.SCHEMA_VERSION:
-            raise TaskStoreUnavailable(
-                "unsupported_schema", stage="schema")
-        if objects != _EXPECTED_OBJECTS:
+        cls._validate_shape(db, version, objects)
+        if full_integrity:
+            check = db.execute("PRAGMA quick_check").fetchall()
+            if check != [("ok",)]:
+                raise TaskStoreUnavailable(
+                    "integrity_check", stage="schema")
+            if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise TaskStoreUnavailable(
+                    "foreign_key_check", stage="schema")
+        return version
+
+    @classmethod
+    def _validate_shape(cls, db: sqlite3.Connection, version: int,
+                        objects: set[tuple[str, str]]) -> None:
+        """Check the exact schema shape declared for ``version``."""
+        if objects != _OBJECTS_BY_VERSION[version]:
             raise TaskStoreUnavailable("foreign_schema", stage="schema")
 
-        for table, expected_sql in migrations.V1_TABLE_SQL.items():
+        table_sql = ({1: migrations.V1_TABLE_SQL,
+                      2: migrations.V2_TABLE_SQL})[version]
+        for table, expected_sql in table_sql.items():
             row = db.execute(
                 "SELECT sql FROM sqlite_master "
                 "WHERE type='table' AND name=?", (table,)).fetchone()
@@ -475,10 +629,11 @@ class TaskRepository:
                     "invalid_table_constraints", stage="schema")
 
         meta_keys = db.execute("SELECT key FROM meta ORDER BY key").fetchall()
-        if meta_keys != [("schema_version",)]:
+        if meta_keys != _META_KEYS_BY_VERSION[version]:
             raise TaskStoreUnavailable("invalid_meta", stage="schema")
 
-        for table, expected_columns in _EXPECTED_COLUMNS.items():
+        expected_columns_by_table = _EXPECTED_COLUMNS_BY_VERSION[version]
+        for table, expected_columns in expected_columns_by_table.items():
             rows = db.execute(f'PRAGMA table_xinfo("{table}")').fetchall()
             columns = tuple(
                 (str(row[1]), str(row[2]).upper(), int(row[3]), row[4],
@@ -500,15 +655,16 @@ class TaskRepository:
                 raise TaskStoreUnavailable(
                     "invalid_foreign_keys", stage="schema")
 
+        expected_indexes = _INDEXES_BY_VERSION[version]
         task_indexes = {
             str(row[1]): (int(row[2]), str(row[3]), int(row[4]))
             for row in db.execute('PRAGMA index_list("tasks")').fetchall()
             if not str(row[1]).startswith("sqlite_")
         }
-        if set(task_indexes) != set(_EXPECTED_INDEXES):
+        if set(task_indexes) != set(expected_indexes):
             raise TaskStoreUnavailable(
                 "invalid_indexes", stage="schema")
-        for name, expected_keys in _EXPECTED_INDEXES.items():
+        for name, expected_keys in expected_indexes.items():
             if task_indexes[name] != (0, "c", 0):
                 raise TaskStoreUnavailable(
                     "invalid_indexes", stage="schema")
@@ -524,16 +680,6 @@ class TaskRepository:
                     or auxiliaries != ((None, 0, "BINARY", 0),)):
                 raise TaskStoreUnavailable(
                     "invalid_indexes", stage="schema")
-
-        if full_integrity:
-            check = db.execute("PRAGMA quick_check").fetchall()
-            if check != [("ok",)]:
-                raise TaskStoreUnavailable(
-                    "integrity_check", stage="schema")
-            if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
-                raise TaskStoreUnavailable(
-                    "foreign_key_check", stage="schema")
-        return version
 
     def _verify_connection_identity(self, db: sqlite3.Connection,
                                     expected_path: Path,
@@ -586,9 +732,10 @@ class TaskRepository:
         except sqlite3.Error:
             pass
 
-    def _open_existing_v1(self,
-                          expected: dict[Path, _FileStamp], *,
-                          recover_hot_journal: bool = False) -> None:
+    def _open_existing(self,
+                       expected: dict[Path, _FileStamp],
+                       expected_version: int, *,
+                       recover_hot_journal: bool = False) -> None:
         current = self._capture_group(
             full_hash=any(stamp.sha256 is not None
                           for stamp in expected.values()))
@@ -603,7 +750,7 @@ class TaskRepository:
             db.execute("BEGIN IMMEDIATE")
             live_kind = self._inspect_database(
                 db, full_integrity=False)
-            if live_kind != migrations.SCHEMA_VERSION:
+            if live_kind != expected_version:
                 raise TaskStoreUnavailable(
                     "schema_changed_before_open", stage="live")
             db.rollback()
@@ -655,7 +802,7 @@ class TaskRepository:
         finally:
             os.close(descriptor)
 
-    def _build_partial_v1(self, partial: Path) -> _FileStamp:
+    def _build_partial_v2(self, partial: Path) -> _FileStamp:
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
         flags |= getattr(os, "O_BINARY", 0)
         descriptor = os.open(partial, flags, 0o600)
@@ -672,7 +819,7 @@ class TaskRepository:
                     db, full_integrity=False) != 0:
                 raise TaskStoreUnavailable(
                     "partial_not_empty", stage="create")
-            migrations.initialize_v1(db)
+            migrations.initialize_v2(db)
             if self._inspect_database(
                     db, full_integrity=False) != migrations.SCHEMA_VERSION:
                 raise TaskStoreUnavailable(
@@ -728,7 +875,7 @@ class TaskRepository:
             if self._capture_group():
                 raise TaskStoreUnavailable(
                     "store_appeared", stage="publish")
-            built = self._build_partial_v1(partial)
+            built = self._build_partial_v2(partial)
             if self._capture_group():
                 raise TaskStoreUnavailable(
                     "store_appeared", stage="publish")
@@ -748,7 +895,7 @@ class TaskRepository:
             if self._inspect_main_only(final) != migrations.SCHEMA_VERSION:
                 raise TaskStoreUnavailable(
                     "published_schema_invalid", stage="publish")
-            self._open_existing_v1(final)
+            self._open_existing(final, migrations.SCHEMA_VERSION)
         except (SchemaTooNew, TaskStoreUnavailable):
             raise
         except sqlite3.DatabaseError as exc:
@@ -784,6 +931,15 @@ class TaskRepository:
 
     # -- task rows ----------------------------------------------------------
 
+    # note is deliberately NOT part of the shared column list: the main
+    # tree must not preload every long note (V12-05), and generic upserts
+    # must never clobber a stored note with a stale cache value.  Notes
+    # are read on demand (note_of) and written only by write_note.
+    _TASK_COLUMNS_SQL = (
+        "id, parent_id, title, horizon, status, sort_key,"
+        " due_date, created_at, updated_at, completed_at,"
+        " importance, urgency, archived, archived_at")
+
     @staticmethod
     def _row_to_task(row) -> Task:
         return Task(
@@ -797,12 +953,37 @@ class TaskRepository:
             created_at=_from_iso(row[7]),
             updated_at=_from_iso(row[8]),
             completed_at=_from_iso(row[9]) if row[9] else None,
+            importance=Level(row[10]) if row[10] is not None else None,
+            urgency=Level(row[11]) if row[11] is not None else None,
+            archived=bool(row[12]),
+            archived_at=_from_iso(row[13]) if row[13] else None,
         )
+
+    def note_of(self, task_id: str) -> str:
+        """Read one note on demand (notes side page; never the tree)."""
+        row = self.db.execute(
+            "SELECT note FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if row is None:
+            raise TodoError("task does not exist")
+        return str(row[0])
+
+    def write_note(self, task_id: str, note: str, updated_at) -> None:
+        """Persist one note in its own transaction; nothing else changes."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = self.db.execute(
+                "UPDATE tasks SET note=?, updated_at=? WHERE id=?",
+                (note, _to_iso(updated_at), task_id))
+            if cursor.rowcount == 0:
+                raise TodoError("task does not exist")
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
 
     def load_all(self) -> dict[str, Task]:
         rows = self.db.execute(
-            "SELECT id, parent_id, title, horizon, status, sort_key,"
-            " due_date, created_at, updated_at, completed_at"
+            f"SELECT {self._TASK_COLUMNS_SQL}"
             " FROM tasks ORDER BY sort_key, created_at").fetchall()
         return {row[0]: self._row_to_task(row) for row in rows}
 
@@ -812,18 +993,26 @@ class TaskRepository:
     def _write_task(self, task: Task) -> None:
         self.db.execute(
             "INSERT INTO tasks (id, parent_id, title, horizon, status,"
-            " sort_key, due_date, created_at, updated_at, completed_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)"
+            " sort_key, due_date, created_at, updated_at, completed_at,"
+            " importance, urgency, archived, archived_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id,"
             " title=excluded.title, horizon=excluded.horizon,"
             " status=excluded.status, sort_key=excluded.sort_key,"
             " due_date=excluded.due_date, updated_at=excluded.updated_at,"
-            " completed_at=excluded.completed_at",
+            " completed_at=excluded.completed_at,"
+            " importance=excluded.importance, urgency=excluded.urgency,"
+            " archived=excluded.archived, archived_at=excluded.archived_at",
             (task.id, task.parent_id, task.title, task.horizon.value,
              task.status.value, task.sort_key,
              task.due_date.isoformat() if task.due_date else None,
              _to_iso(task.created_at), _to_iso(task.updated_at),
-             _to_iso(task.completed_at) if task.completed_at else None),
+             _to_iso(task.completed_at) if task.completed_at else None,
+             (task.importance.value
+              if task.importance is not None else None),
+             (task.urgency.value if task.urgency is not None else None),
+             1 if task.archived else 0,
+             _to_iso(task.archived_at) if task.archived_at else None),
         )
 
     def delete_many(self, ids: list[str]) -> bool:
@@ -901,10 +1090,11 @@ class TaskRepository:
         return str(row[0]), Status(row[1]), Horizon(row[2])
 
     def load_focus_task(self) -> Task | None:
+        columns = ", ".join(f"t.{name}" for name in
+                            self._TASK_COLUMNS_SQL.split(", "))
         row = self.db.execute(
-            "SELECT t.id, t.parent_id, t.title, t.horizon, t.status,"
-            " t.sort_key, t.due_date, t.created_at, t.updated_at,"
-            " t.completed_at FROM focus AS f"
+            f"SELECT {columns}"
+            " FROM focus AS f"
             " JOIN tasks AS t ON t.id=f.task_id WHERE f.id=1").fetchone()
         return self._row_to_task(row) if row is not None else None
 
@@ -913,3 +1103,25 @@ class TaskRepository:
 
     def clear_focus(self) -> bool:
         return self.apply_batch(focus=None)
+
+    # -- snapshot inspection (used by the backup module) ---------------------
+
+    @classmethod
+    def inspect_snapshot(cls, path: Path) -> tuple[int, int]:
+        """Fully verify a standalone store file (e.g. a backup copy).
+
+        Returns ``(declared_version, task_count)`` for an exact known
+        schema; anything else raises instead of trusting the file.
+        """
+        db = sqlite3.connect(
+            f"{Path(path).as_uri()}?mode=ro&immutable=1", uri=True)
+        try:
+            declared = cls._inspect_database(db, full_integrity=True)
+            if declared == 0:
+                raise TaskStoreUnavailable(
+                    "empty_store_unsupported", stage="snapshot")
+            count = int(db.execute(
+                "SELECT COUNT(*) FROM tasks").fetchone()[0])
+            return declared, count
+        finally:
+            db.close()

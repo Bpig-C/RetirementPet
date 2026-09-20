@@ -78,11 +78,16 @@ def make_manifest(**overrides) -> dict:
         "schema_version": "1.0",
         "package": {
             "publisher_id": "community.example",
+            "publisher_ref": "community.example",
             "id": "sample-pack",
             "version": "1.0.0",
             "display_name": {"zh-CN": "示例角色包"},
         },
         "series": {"id": "sample-series", "display_name": {"zh-CN": "示例系列"}},
+        "publishers": [
+            {"id": "community.example", "display_name": "Example Author",
+             "homepage": None, "contact": None},
+        ],
         "rights_declarations": [
             {"id": "rights.original", "basis": "original",
              "claimant_ref": "community.example",
@@ -116,7 +121,18 @@ def make_manifest(**overrides) -> dict:
             {"id": "demo",
              "display_name": {"zh-CN": "示例"},
              "thumbnail_asset": "thumb",
-             "geometry": {"logical_canvas": {"width": 256, "height": 256}},
+             "geometry": {
+                 "logical_canvas": {"width": 256, "height": 256},
+                 "content_bounds": {"x": 28, "y": 16, "width": 200,
+                                    "height": 220},
+                 "motion_bounds": {"x": 12, "y": 8, "width": 232,
+                                   "height": 240},
+                 "base_anchor": {"x": 128, "y": 248},
+                 "bubble_anchor": {"x": 128, "y": 40},
+                 "reference_height": 220,
+                 "hit_regions": [{"shape": "rect", "x": 28, "y": 16,
+                                  "width": 200, "height": 220}],
+             },
              "actions": {"core.idle": "action.idle"}},
         ],
     }

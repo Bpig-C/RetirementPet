@@ -149,6 +149,47 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+# Harness contract: the checks every completed run MUST contain, per
+# target.  The go/no-go consumer re-derives the verdict from these
+# instead of trusting the report's own result label (V12-08 OVR-01).
+REQUIRED_CHECKS = {
+    "source": (
+        "A.window-found", "A.window-visible", "A.no-caption",
+        "A.no-thickframe", "A.no-minmaxbox", "A.toolwindow",
+        "A.layered", "B.onboarding-panel-reported",
+        "B.startup-no-focus-steal", "C.window-visible",
+        "C.click-through-exstyle", "C.toolwindow-under-click-through",
+        "C.hwnd-destroyed", "C.exit-code-zero",
+        "C.process-exited-by-itself", "C.ipc-quit-delivered",
+    ),
+    "exe": (
+        "A.window-found", "A.window-visible", "A.no-caption",
+        "A.no-thickframe", "A.no-minmaxbox", "A.toolwindow",
+        "A.layered", "B.onboarding-panel-reported",
+        "B.startup-no-focus-steal", "C.window-visible",
+        "C.click-through-exstyle", "C.toolwindow-under-click-through",
+        "C.hwnd-destroyed", "C.exit-code-zero",
+        "C.process-exited-by-itself", "C.ipc-quit-delivered",
+        "D.process-exited-by-itself", "D.no-error-storm",
+        "D.shutdown-sequence-logged", "D.state-persisted",
+        "D.onboarding-hwnd-destroyed", "D.ipc-quit-delivered",
+        "D.hwnd-destroyed", "D.exit-code-zero",
+        "E.startup-window-found", "E.startup-window-visible",
+        "E.startup-no-focus-steal", "E.startup-no-onboarding-panel",
+        "E.frozen-startup-command", "E.process-exited-by-itself",
+        "E.hwnd-destroyed", "E.exit-code-zero", "E.ipc-quit-delivered",
+        "F.primary-window-found", "F.primary-still-running",
+        "F.primary-hidden-before-duplicate", "F.hide-delivered",
+        "F.duplicate-exited-by-itself",
+        "F.duplicate-did-not-change-focus",
+        "F.duplicate-did-not-show-primary",
+        "F.completed-campaign-has-no-panel",
+        "F.primary-exited-by-itself", "F.primary-exit-code-zero",
+        "F.ipc-quit-delivered", "F.duplicate-exit-code-zero",
+    ),
+}
+
+
 class Report:
     def __init__(self, target: str, run_dir: Path):
         self.target = target
@@ -758,6 +799,11 @@ def main() -> int:
     identity_prefix = (
         target.build_info["build_id"][:12]
         if target.build_info is not None else "source")
+    # The report path is handed to the launched app, which resolves it
+    # against ITS OWN cwd (the per-scenario data dir); a relative
+    # evidence root would land the report where neither side looks.
+    # The harness therefore always works with absolute paths.
+    args.evidence_root = args.evidence_root.resolve()
     run_dir = args.evidence_root / (
         f"{stamp}-{identity_prefix}-{args.target}-verify-windows-"
         f"{uuid4().hex[:8]}")

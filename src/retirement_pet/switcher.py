@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -173,6 +174,7 @@ class ActiveSelectionStore:
             if not library.degraded:
                 library._preflight_existing_database()
             self._connect()
+            self._reconcile_activation_journal()
         except Exception:
             self.close()
             raise
@@ -192,6 +194,20 @@ class ActiveSelectionStore:
             " character_fqid TEXT NOT NULL,"
             " variant_id TEXT, config_revision_id TEXT,"
             " generation INTEGER NOT NULL, commit_sequence INTEGER NOT NULL)")
+        # Durable pending activation facts (CR-P03): written in the SAME
+        # transaction as every confirmed ACTIVE write and deleted only after
+        # the events.jsonl line is proven, so an audit-write failure can be
+        # replayed from facts instead of being inferred from the one ACTIVE
+        # slot that survived.
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS activation_audit_due ("
+            " publisher_id TEXT NOT NULL, package_id TEXT NOT NULL,"
+            " package_version TEXT NOT NULL, content_digest TEXT NOT NULL,"
+            " character_fqid TEXT NOT NULL,"
+            " generation INTEGER NOT NULL, commit_sequence INTEGER NOT NULL,"
+            " created_at TEXT NOT NULL,"
+            " UNIQUE (publisher_id, package_id, package_version,"
+            "         content_digest, generation, commit_sequence))")
         self._db.commit()
 
     def reconnect(self) -> None:
@@ -202,6 +218,37 @@ class ActiveSelectionStore:
             if not self._library.degraded:
                 self._library._preflight_existing_database()
             self._connect()
+
+    def _reconcile_activation_journal(self) -> None:
+        """Backfill the append-only activation audit at startup (review P-3).
+
+        Two idempotent, audit-only sources; neither can block startup.
+        First the durable pending ledger (CR-P03): every confirmed ACTIVE
+        write left a due row until its events.jsonl line was proven, so a
+        history whose audit write failed mid-process replays from facts
+        even after the ACTIVE slot was overwritten by a newer switch.
+        Then the legacy backfill: an ACTIVE row from an older build with
+        no due row still gets its line exactly once (``recovered`` set).
+        """
+        if self._library.degraded or self._db is None:
+            return
+        try:
+            self.drain_activation_audit()
+            active = self.get("active")
+            if active is None:
+                return
+            self._library.record_activation_committed(
+                publisher_id=active.publisher_id,
+                package_id=active.package_id,
+                package_version=active.package_version,
+                content_digest=active.content_digest,
+                character_fqid=active.character_fqid,
+                generation=active.generation,
+                commit_sequence=active.commit_sequence,
+                recovered=True,
+            )
+        except Exception:  # noqa: BLE001 - audit must never block startup
+            logger.exception("activation journal reconciliation failed")
 
     def close(self) -> None:
         if self._db is not None:
@@ -234,6 +281,8 @@ class ActiveSelectionStore:
                  selection.character_fqid, selection.variant_id,
                  selection.config_revision_id, selection.generation,
                  selection.commit_sequence))
+            if slot == "active":
+                self._insert_activation_due(selection)
         return True
 
     def commit_if_newer(self, selection: ActiveSelection,
@@ -258,12 +307,82 @@ class ActiveSelectionStore:
                      selection.character_fqid, selection.variant_id,
                      selection.config_revision_id, selection.generation,
                      selection.commit_sequence))
+                if slot == "active":
+                    # The audit fact is durable exactly when the confirmed
+                    # selection is (CR-P03): one transaction, no window in
+                    # which a commit exists without a recoverable audit due.
+                    self._insert_activation_due(selection)
                 self._db.execute("COMMIT")
                 return True
             except sqlite3.Error:
                 if self._db.in_transaction:
                     self._db.execute("ROLLBACK")
                 raise
+
+    def _insert_activation_due(self, selection: ActiveSelection) -> None:
+        self._db.execute(
+            "INSERT OR IGNORE INTO activation_audit_due VALUES"
+            " (?,?,?,?,?,?,?,?)",
+            (selection.publisher_id, selection.package_id,
+             selection.package_version, selection.content_digest,
+             selection.character_fqid, selection.generation,
+             selection.commit_sequence,
+             datetime.now(timezone.utc).isoformat(timespec="seconds")))
+
+    def drain_activation_audit(self, *,
+                               skip: ActiveSelection | None = None) -> int:
+        """Retry every durable pending activation fact (CR-P03).
+
+        Facts are appended to events.jsonl in commit order; a fact whose
+        journal line is proven (appended now, or already present) is
+        removed from the ledger.  The first fact the journal still cannot
+        take stops the drain and stays durable for the next confirmed
+        commit or the next startup.  ``skip`` excludes one selection that
+        the caller journals inline.  Returns the number of facts retired.
+        """
+        if self._library.degraded or self._db is None:
+            return 0
+        rows = self._db.execute(
+            "SELECT rowid, publisher_id, package_id, package_version,"
+            " content_digest, character_fqid, generation, commit_sequence"
+            " FROM activation_audit_due ORDER BY rowid").fetchall()
+        drained = 0
+        for row in rows:
+            if skip is not None and tuple(row[1:]) == (
+                    skip.publisher_id, skip.package_id,
+                    skip.package_version, skip.content_digest,
+                    skip.character_fqid, skip.generation,
+                    skip.commit_sequence):
+                continue
+            proven = self._library.record_activation_committed(
+                publisher_id=row[1], package_id=row[2],
+                package_version=row[3], content_digest=row[4],
+                character_fqid=row[5], generation=int(row[6]),
+                commit_sequence=int(row[7]), recovered=True)
+            if not proven:
+                break
+            self._db.execute(
+                "DELETE FROM activation_audit_due WHERE rowid=?", (row[0],))
+            self._db.commit()
+            drained += 1
+        return drained
+
+    def clear_activation_audit_due(self, selection: ActiveSelection) -> None:
+        """Retire the durable fact whose journal line was proven inline."""
+        self._db.execute(
+            "DELETE FROM activation_audit_due WHERE publisher_id=? AND"
+            " package_id=? AND package_version=? AND content_digest=? AND"
+            " generation=? AND commit_sequence=?",
+            (selection.publisher_id, selection.package_id,
+             selection.package_version, selection.content_digest,
+             selection.generation, selection.commit_sequence))
+        self._db.commit()
+
+    def pending_activation_audit_count(self) -> int:
+        if self._db is None:
+            return 0
+        return int(self._db.execute(
+            "SELECT COUNT(*) FROM activation_audit_due").fetchone()[0])
 
     @staticmethod
     def _validate_write(selection: ActiveSelection, slot: str) -> None:
@@ -573,6 +692,44 @@ class RuntimeSwitcher:
         self._forget_candidate(request)
         self.in_safe_mode = False
         self.last_error = None
+        self._record_activation(selection)
+
+    def _record_activation(self, selection: ActiveSelection) -> None:
+        """Journal the audit line AFTER a confirmed ACTIVE write (P-3).
+
+        The durable due-row for this selection was written in the same
+        transaction as the ACTIVE row (CR-P03), so a failed audit write
+        can never lose the fact: older pending facts retry first to keep
+        the journal in commit order, then this selection's line is
+        attempted inline and its due row retired only on proof.  Any
+        failure keeps the facts pending for the next confirmed commit or
+        the next startup - auditing can neither fail a switch nor fake
+        one, and never reverses a confirmed selection.
+        """
+        if self._library.degraded:
+            return
+        try:
+            self._store.drain_activation_audit(skip=selection)
+        except Exception:  # noqa: BLE001 - audit must never fail a switch
+            logger.exception("pending activation audit retry failed")
+        try:
+            proven = self._library.record_activation_committed(
+                publisher_id=selection.publisher_id,
+                package_id=selection.package_id,
+                package_version=selection.package_version,
+                content_digest=selection.content_digest,
+                character_fqid=selection.character_fqid,
+                generation=selection.generation,
+                commit_sequence=selection.commit_sequence,
+            )
+        except Exception:  # noqa: BLE001 - audit must never fail a switch
+            logger.exception("ACTIVATE_COMMITTED audit hook failed")
+            return
+        if proven:
+            try:
+                self._store.clear_activation_audit_due(selection)
+            except Exception:  # noqa: BLE001 - cleanup stays best-effort
+                logger.exception("activation audit due-row cleanup failed")
 
     # -- helpers -------------------------------------------------------------
 
@@ -836,6 +993,7 @@ class RuntimeSwitcher:
             return False
         self.active_generation = selection.generation
         self.commit_sequence = selection.commit_sequence
+        self._record_activation(selection)
         self._release_runtime_caches_except(candidate)
         self.current_runtime = candidate
         self.in_safe_mode = False

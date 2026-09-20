@@ -15,7 +15,9 @@ TEXT_DAYS = QColor(248, 248, 250)
 
 
 class CountdownPanel:
-    def render_expanded(self, painter: QPainter, rect: QRectF, snap: CountdownSnapshot) -> None:
+    def render_expanded(self, painter: QPainter, rect: QRectF,
+                        snap: CountdownSnapshot,
+                        heading: str | None = None) -> None:
         painter.setRenderHint(QPainter.Antialiasing, True)
         card = QRectF(rect.left() + 4, rect.top() + 4, rect.width() - 8, rect.height() - 8)
         painter.setPen(Qt.NoPen)
@@ -27,7 +29,10 @@ class CountdownPanel:
 
         painter.setPen(TEXT_MAIN)
         painter.setFont(QFont("Microsoft YaHei UI", 11, QFont.DemiBold))
-        painter.drawText(QPointF(left, top + 26), snap.stage_text)
+        # V12-06: the heading line renders the user's countdown template;
+        # None keeps the built-in stage text (identical by default).
+        painter.drawText(QPointF(left, top + 26),
+                         heading if heading is not None else snap.stage_text)
 
         painter.setPen(TEXT_SUB)
         painter.setFont(QFont("Microsoft YaHei UI", 8))
@@ -71,7 +76,9 @@ class CountdownPanel:
             f"目标  {snap.target.strftime('%Y.%m.%d  %H:%M')}",
         )
 
-    def render_collapsed(self, painter: QPainter, rect: QRectF, snap: CountdownSnapshot) -> None:
+    def render_collapsed(self, painter: QPainter, rect: QRectF,
+                         snap: CountdownSnapshot,
+                         show_clock: bool = True) -> None:
         painter.setRenderHint(QPainter.Antialiasing, True)
         pill = QRectF(rect.left() + 4, rect.top() + 2, rect.width() - 8, rect.height() - 4)
         painter.setPen(Qt.NoPen)
@@ -81,7 +88,10 @@ class CountdownPanel:
         if snap.is_past:
             text, sub = "退休快乐", ""
         else:
-            text, sub = snap.days_text, snap.clock_text
+            # V12-06: badge layout shows the days count only; summary and
+            # hover layouts keep the clock alongside.
+            text = snap.days_text
+            sub = snap.clock_text if show_clock else ""
         painter.setPen(TEXT_DAYS)
         painter.setFont(QFont("Segoe UI", 12, QFont.Bold))
         painter.drawText(

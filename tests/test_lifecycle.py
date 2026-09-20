@@ -1054,3 +1054,137 @@ def test_partial_event_tail_is_preserved_and_recovery_is_idempotent(tmp_path):
     reopened = PackLibrary(root)
     reopened.close()
     assert events_path.read_bytes() == repaired
+
+
+# -- V12-07: version coexistence, safe uninstall, pending deletes ------------
+
+
+def _second_version(lib: PackLibrary, tmp_path: Path):
+    """Install minimal-static 1.0.1: same package identity, new revision."""
+    from test_petpack import build_pack, make_manifest, png_bytes
+
+    manifest = make_manifest()
+    manifest["package"]["publisher_id"] = "community.retirementpet"
+    manifest["package"]["id"] = "minimal-static"
+    manifest["package"]["version"] = "1.0.1"
+    manifest["actions"][1]["id"] = (
+        "community.retirementpet.minimal-static.sample-series.demo.wave")
+    manifest["actions"][1]["semantic"] = manifest["actions"][1]["id"]
+    pack = tmp_path / "minimal-static-1.0.1.petpack"
+    pack.write_bytes(build_pack(manifest, {
+        "assets/thumb.png": png_bytes(4, 4, (9, 8, 7, 255)),
+        "assets/idle_0.png": png_bytes(8, 8),
+    }))
+    return lib.install(pack)
+
+
+def test_two_versions_of_one_package_coexist(lib, tmp_path):
+    first = lib.install(REF_PACK)
+    second = _second_version(lib, tmp_path)
+    assert first.revision_key != second.revision_key
+    assert second.revision_key.package_version == "1.0.1"
+    keys = {record.revision_key for record in lib.list_revisions()}
+    assert {first.revision_key, second.revision_key} <= keys
+
+
+def test_request_uninstall_refuses_builtin_active_and_restore_basis(
+        lib, tmp_path):
+    lib.register_builtin_release(OFFICIAL_PACK)
+    builtin = lib.builtin_revisions()[0]
+    with pytest.raises(LifecycleError):
+        lib.request_uninstall(builtin.revision_key)
+
+    record = lib.install(REF_PACK)
+    with pytest.raises(LifecycleError):
+        lib.request_uninstall(record.revision_key,
+                              active_guard=lambda rk: True)
+    assert lib.get_revision(record.revision_key) is not None
+
+    second = _second_version(lib, tmp_path)
+    outcome = lib.request_uninstall(
+        second.revision_key, active_guard=lambda rk: rk == record.revision_key)
+    assert outcome == "uninstalled"
+    assert lib.get_revision(second.revision_key) is None
+
+
+def test_locked_media_becomes_pending_delete_and_restart_completes(
+        lib, tmp_path):
+    record = lib.install(REF_PACK)
+    handle = open(record.pack_path, "rb")
+    try:
+        outcome = lib.request_uninstall(
+            record.revision_key, active_guard=lambda rk: False)
+        assert outcome == "pending_delete"
+        # nothing is half-deleted: the row stays listed and marked pending
+        assert lib.get_revision(record.revision_key) is not None
+        assert record.revision_key in lib.pending_delete_keys()
+        events = (lib.journal_dir / "events.jsonl").read_text("utf-8")
+        assert "UNINSTALL_PENDING" in events
+    finally:
+        handle.close()
+
+    # a real restart (new library instance): deletion resumes only via
+    # the guarded recovery, evaluated against the fresh selection facts
+    lib.close()
+    reopened = PackLibrary(lib.root)
+    try:
+        # first with a protection guard: the revision must survive
+        assert reopened.recover_pending_deletes(lambda rk: True) == 1
+        assert reopened.pending_delete_keys() == []
+        assert reopened.get_revision(record.revision_key) is not None
+        assert record.pack_path.is_file()
+        events = (reopened.journal_dir / "events.jsonl").read_text("utf-8")
+        assert "UNINSTALL_CANCELLED" in events
+
+        # re-request, then resume unguarded: completes for real
+        assert reopened.request_uninstall(
+            record.revision_key, active_guard=lambda rk: False)             == "uninstalled"
+        assert reopened.pending_delete_keys() == []
+        assert any(reopened.trash_dir.iterdir())
+        events = (reopened.journal_dir / "events.jsonl").read_text("utf-8")
+        assert "UNINSTALL_TRASHED" in events
+        # receipts and rights facts survive the deletion
+        assert list(reopened.receipts_dir.glob("*.json"))
+    finally:
+        reopened.close()
+
+
+def test_recovery_cancelled_state_closes_cleanly(lib, tmp_path):
+    record = lib.install(REF_PACK)
+    handle = open(record.pack_path, "rb")
+    try:
+        assert lib.request_uninstall(
+            record.revision_key, active_guard=lambda rk: False)             == "pending_delete"
+    finally:
+        handle.close()
+
+    # an explicit API cancel keeps everything and records why
+    assert lib.cancel_pending_delete(record.revision_key,
+                                     reason="reselected_by_user") is True
+    assert lib.pending_delete_keys() == []
+    assert lib.get_revision(record.revision_key) is not None
+    assert record.pack_path.is_file()
+    events = (lib.journal_dir / "events.jsonl").read_text("utf-8")
+    assert "UNINSTALL_CANCELLED" in events
+    # a second cancel is an honest no-op
+    assert lib.cancel_pending_delete(record.revision_key,
+                                     reason="again") is False
+
+
+def test_recovery_media_gone_leaves_no_selectable_entry(lib, tmp_path):
+    record = lib.install(REF_PACK)
+    handle = open(record.pack_path, "rb")
+    try:
+        assert lib.request_uninstall(
+            record.revision_key, active_guard=lambda rk: False)             == "pending_delete"
+    finally:
+        handle.close()
+
+    # media disappears out from under the pending state (external cause)
+    record.pack_path.unlink()
+    assert lib.recover_pending_deletes(lambda rk: False) == 1
+    assert lib.pending_delete_keys() == []
+    # no catalog row without media: nothing selectable remains
+    assert lib.get_revision(record.revision_key) is None
+    events = (lib.journal_dir / "events.jsonl").read_text("utf-8")
+    assert "UNINSTALL_TRASHED" in events
